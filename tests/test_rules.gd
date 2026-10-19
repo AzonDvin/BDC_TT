@@ -556,3 +556,38 @@ func test_melee_without_choice_uses_suggested_weapons() -> void:
 	H.activate(b, a)
 	assert_eq(Combat.start_melee(b, d.uid, {}), "")
 	assert_eq(b.duel["att_w"], ["axe", "dagger"])
+
+
+## p.33: drawn power lasts until the end of the fighter's next activation; drawing again then keeps it going.
+func test_drawn_power_expires_after_next_activation_unless_redrawn() -> void:
+	var b := H.bare_battle(8)
+	var w := H.add(b, GM, "guild_wizard", 0, Vector2(5, 5), ["arcane_staff"])
+	H.add(b, VK, "verminkin_warrior", 1, Vector2(30, 30))
+	w.prepared = [Catalog.lore(GM, "saints")["spells"][2].duplicate()]
+	var again := func():
+		b.turn = 0
+		w.activated = false
+		b.pending = {}
+		b.activate(w.uid)
+	H.activate(b, w)
+	assert_eq(Magic.draw_power(b), "")
+	b.end_activation()
+	again.call()
+	assert_eq(Magic.draw_power(b), "", "can draw again on the next activation")
+	b.end_activation()
+	again.call()
+	assert_true(w.statuses.get("drawn_power", false), "redrawn power carries to the following activation")
+	b.end_activation()   # neither cast nor drew
+	assert_false(w.statuses.get("drawn_power", false), "unused power is lost when that activation ends")
+
+
+## p.33: one casting die miscasts on a natural 1, two dice on any double: 1 in 6 either way.
+func test_miscast_odds_one_and_two_dice() -> void:
+	var b := H.bare_battle(99)
+	var f := FighterState.new()
+	for n in [1, 2]:
+		var miscasts := 0
+		for i in 6000:
+			if Magic._casting_roll(b, f, n)["miscast"]:
+				miscasts += 1
+		assert_between(miscasts / 6000.0, 0.15, 0.183, "%d dice miscast rate" % n)

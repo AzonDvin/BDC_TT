@@ -392,6 +392,29 @@ func _make_fighter(f: FighterState) -> Node3D:
 	return root
 
 
+var _moving := {}                # uid -> Tween while a fighter slides along its move
+
+
+## Slides a fighter's model through the given world points over `seconds` (sync leaves it alone meanwhile).
+func animate_path(uid: int, pts: Array, seconds: float) -> void:
+	var n: Node3D = fighter_nodes.get(uid)
+	if n == null or pts.size() < 2:
+		return
+	var total := 0.0
+	for i in range(1, pts.size()):
+		total += (pts[i - 1] as Vector3).distance_to(pts[i])
+	if total < 0.05:
+		return
+	if _moving.has(uid):
+		(_moving[uid] as Tween).kill()
+	n.position = pts[0]
+	var tw := create_tween()
+	for i in range(1, pts.size()):
+		tw.tween_property(n, "position", pts[i], seconds * (pts[i - 1] as Vector3).distance_to(pts[i]) / total)
+	_moving[uid] = tw
+	tw.finished.connect(func(): _moving.erase(uid))
+
+
 func sync(selected := -1, active := -1, highlight := {}) -> void:
 	for f in battle.fighters:
 		var n: Node3D = fighter_nodes.get(f.uid)
@@ -399,7 +422,8 @@ func sync(selected := -1, active := -1, highlight := {}) -> void:
 			n = _make_fighter(f)
 			fighter_nodes[f.uid] = n
 		n.visible = f.on_board()
-		n.position = Vector3(f.pos.x, f.elev, f.pos.y)
+		if not _moving.has(f.uid):
+			n.position = Vector3(f.pos.x, f.elev, f.pos.y)
 		var ring: MeshInstance3D = n.get_node("Ring")
 		ring.visible = f.uid == selected or f.uid == active or highlight.has(f.uid)
 		var rm := ring.material_override as StandardMaterial3D

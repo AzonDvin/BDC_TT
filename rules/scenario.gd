@@ -31,6 +31,61 @@ const AUTOMATED_TWISTS: PackedStringArray = ["a_brewing_storm", "battle_for_the_
 	"on_fire", "defiant_stand", "barricaded_holdout", "surrounded_on_all_sides", "old_debt_collectors_house"]
 
 
+## What each scenario is about and how it is won (pp.37-48), for the battle screen's hover text.
+const DESCRIPTIONS := {
+	"a_deadly_encounter": "Two warbands clash in the streets (pp.37-38).\n• Hold the Centre: at the end of a round, a warband with fighters within 6\" of the centre and no enemies there scores d3 VP.\n• Death Marks: +1 VP for each enemy taken down.\n• At the end of a round, 8+ VP ends the battle and the most VP wins (tied at 8+: play on). Otherwise the battle ends when a warband flees.\n• 2 battle groups, deployed within 12\" of the entry point; reinforcements from round 3.",
+	"glimmers_in_the_dark": "Treasure glimmers near the centre of the district (pp.39-40).\n• 3 treasure tokens near the centre. Pick one up during a Normal move (within 1/2\", costs 1\"); Beasts and Thralls can't carry treasure.\n• A holder that ends a move within 1\" of a table edge, not engaged, escapes with it.\n• 3 fighters escaping with treasure wins at once; otherwise the battle ends when a warband flees.\n• 3 battle groups, deployed within 12\"; reinforcements from round 2.",
+	"no_quarter": "A fight for the four quarters of a crossroads (pp.41-42).\n• From round 3, at the end of each round, having more fighters wholly within a quarter than the enemy controls it: 1 domination mark each. Fighters wholly within 6\" of the centre count for no quarter.\n• At the end of a round, 10+ marks and not tied wins. Otherwise the battle ends when a warband flees.\n• 3 battle groups, deployed within 9\"; reinforcements from round 2.",
+	"the_chapel": "A ruined chapel stands in the centre with treasure in its corners (pp.43-44).\n• 3 treasure tokens within 1\" of chapel corners.\n• Death Marks: 1 per enemy taken down. At the end of a round, 8+ marks ends the battle and the most marks wins (tied: play on). Otherwise the battle ends when a warband flees.\n• 3 battle groups, deployed within 9\"; reinforcements from round 3.",
+	"street_of_death": "An ambush on a narrow street (pp.45-46).\n• The underdog is the Ambusher. The Defender's marked Leader or Champion (the Hit) and escorts start on the street and try to escape off the escape edge.\n• The Hit ending a move within 1\" of the escape edge, not engaged: the Defender wins. The Hit taken down: the Ambusher wins. The Ambusher flees: the Defender wins.\n• The Defender takes no flee tests. Reinforcements arrive from rolled table edges (Ambusher round 2, Defender round 3).",
+	"the_find": "A stash has been found in a holding in the centre (pp.47-48).\n• The Defender guards 5 treasure tokens within 3\" of the holding's centre; Defender fighters can't pick up treasure until round 3.\n• 3 fighters escaping off the table with treasure wins at once; otherwise the battle ends when a warband flees.\n• 2 battle groups; the Attacker deploys within 6\" of its entry point, the Defender within 3\" of the holding. Reinforcements from round 3.",
+}
+
+## The twists (one per battle) and what they change.
+const TWIST_DESCRIPTIONS := {
+	"a_brewing_storm": "From round 2, each round a 5+ starts the rain: visibility drops to 12\" and misfire rolls get -1.",
+	"battle_for_the_tower": "A tower stands in the centre. Leaders and Champions within 6\" of it automatically pass flee tests, and Hold the Centre scores 3 VP instead of d3.",
+	"outflank": "Each warband splits into 3 battle groups instead of 2.",
+	"delayed_arrival": "Reinforcements only arrive from round 6.",
+	"condemned": "Each round, the player trailing on VP picks an enemy fighter: taking it down is worth +1 VP.",
+	"the_chest": "A chest is placed within 6\" of an unused entry point. Leaders and Champions within 3\" of it pass flee tests; sole control within 3\" at the end of a round is worth +1 VP.",
+	"cursed_coin": "Treasure holders take a Willpower test at the end of each activation or suffer d3 damage (Demons and Undead are immune).",
+	"false_riches": "5 treasure tokens; the first time a fighter comes within 3\" of one, a roll of 1-2 shows it is worthless and it is removed.",
+	"thieves_in_the_dark": "Darkness: nothing can be seen beyond 9\".",
+	"beggars_desperation": "Fighters not holding treasure get +1 to melee attack rolls against a treasure holder.",
+	"saint_tricksters_game": "One token starts in the centre; each time one is picked up, the next appears 3d6\" from the centre (up to 5).",
+	"upturned_wagon": "6 treasure tokens spill out within 3\" of the centre.",
+	"rolling_fog": "Each round a 4+ fogs a random quarter: no visibility beyond 6\" for fighters in the fog. The fog ends when no quarter fogs.",
+	"show_of_strength": "No battle groups: every fighter deploys at the start, within 9\" of the entry point.",
+	"the_forsaken_quarter": "From round 4, the player behind on marks names a quarter that nobody can control.",
+	"turf_war": "Controlling the enemy's home quarter is worth 3 marks.",
+	"the_critical_quarter": "From round 3, a random quarter is worth +1 mark each round.",
+	"saints_statue": "A statue of a saint stands in the centre. Ending an activation within 6\" of it heals d3 (not Demons or Undead).",
+	"a_hidden_trove": "5 treasure tokens: one in each chapel corner and one in the centre.",
+	"desecrated_ground": "The first fighter taken down inside the chapel triggers a d6 roll: rain, heavy rain (12\" visibility, -1 misfire), sprouting grass (ending a move on the chapel floor heals 1; Demons and Undead take 1), a blood frenzy (+1 melee Attacks in the chapel) or thunder (the round ends at once).",
+	"the_saints_sarcophagus": "A sarcophagus stands in the centre. A fighter touching it and not engaged can try to pry off the lid as an action (6+, +1 for each earlier friendly attempt this round): an unholy curse, nothing, a coin purse (treasure) or an heirloom.",
+	"drunk_as_an_eel": "The Hit is drunk: at the start of each activation it rolls a d6; on 1-5 it staggers d6\" in a random direction and its activation ends, on a 6 it sobers up. It also sobers up once damaged or engaged (Demons and Undead are never drunk).",
+	"heavy_downpour": "Rain: 9\" visibility and -1 to misfire rolls. It stops when a d6 rolls under the round number.",
+	"vow_of_blood": "The Hit has sworn to survive: +3 Life.",
+	"hidden_tunnel": "Two linked tunnel entrances; the Hit can use them to move from one to the other.",
+	"shadows_lurk_above": "The Ambusher may deploy closer to the street if 3\" or more up and more than 9\" from enemies.",
+	"tip_off": "Both of the Defender's reserve groups arrive at the start of round 3.",
+	"on_fire": "The holding is burning: it smoulders, then blazes on a 4+ (moving through it deals d3), then becomes an inferno (treasure inside is destroyed on a 4+ each round).",
+	"defiant_stand": "The Defender takes no flee tests.",
+	"barricaded_holdout": "d3 barricade walls (up to 5\" long) stand on the holding's edges.",
+	"surrounded_on_all_sides": "The Attacker deploys both groups within 6\" of any table edge; the Defender can pick up treasure from round 1.",
+	"old_debt_collectors_house": "The holding hides 8 treasure tokens instead of 5.",
+}
+
+
+static func description(id: String) -> String:
+	return DESCRIPTIONS.get(id, "")
+
+
+static func twist_description(id: String) -> String:
+	return TWIST_DESCRIPTIONS.get(id, "")
+
+
 static func display_name(id: String) -> String:
 	return NAMES.get(id, id)
 

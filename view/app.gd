@@ -6,8 +6,11 @@ const GOLD := Color("d9b45a")
 const PAPER := Color("e8dcc0")
 const INK := Color("1b1915")
 
-var battle_config := {}          # {"rosters": [Roster, Roster], "scenario": id, "twist": int, "seed": int}
+var battle_config := {}          # {"rosters": [Roster, Roster], "scenario": id, "twist": int, "seed": int, "layout": {}, "ai": ["", "normal"]}
 var load_battle_path := ""
+var ai_speed := 1                # computer player pace: index into BattleView.AI_SPEEDS
+var sound_on := true
+const SETTINGS_PATH := "user://settings.cfg"
 var edit_roster_path := ""
 var theme: Theme
 
@@ -15,6 +18,27 @@ var theme: Theme
 func _ready() -> void:
 	theme = build_theme()
 	get_tree().root.theme = theme
+	load_settings()
+
+
+## Player preferences kept between sessions: sound on/off and the computer's pace.
+func load_settings() -> void:
+	var c := ConfigFile.new()
+	if c.load(SETTINGS_PATH) == OK:
+		sound_on = bool(c.get_value("game", "sound_on", true))
+		ai_speed = int(c.get_value("game", "ai_speed", 1))
+	apply_sound()
+
+
+func save_settings() -> void:
+	var c := ConfigFile.new()
+	c.set_value("game", "sound_on", sound_on)
+	c.set_value("game", "ai_speed", ai_speed)
+	c.save(SETTINGS_PATH)
+
+
+func apply_sound() -> void:
+	AudioServer.set_bus_mute(0, not sound_on)
 
 
 func player_color(p: int) -> Color:

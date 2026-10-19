@@ -194,3 +194,109 @@ func test_defender_fight_button_works_without_extra_clicks() -> void:
 	fight.pressed.emit()
 	assert_true(b.pending.get("type", "") == "duel_turn" or b.duel.is_empty(), "the duel goes ahead (pending: %s)" % b.pending.get("type", ""))
 	view.queue_free()
+
+
+func test_one_player_battle_against_the_computer() -> void:
+	App.battle_config = {"rosters": [Samples.roster("guild_mercenaries"), Samples.roster("verminkin")], "scenario": "no_quarter", "twist": 0, "seed": 11, "ai": ["", "normal"]}
+	App.load_battle_path = ""
+	var view = load("res://view/battle.tscn").instantiate()
+	_root().add_child(view)
+	var b: Battle = view.b
+	assert_eq(AI.controller(b, 1), "normal", "the setup's controller choice reaches the battle")
+	var ai_turns := 0
+	var saw_banner := false
+	var guard := 0
+	while guard < 800 and not b.is_over() and b.round_no <= 2:
+		guard += 1
+		if AI.should_act(b):
+			ai_turns += 1
+			var active_before := b.active
+			view._click(Vector2(18, 18), 0.0, null)   # human clicks are ignored on the computer's turn
+			assert_eq(b.active, active_before)
+			view._update_actions()
+			for c in view.actions.get_children():
+				if c is Label and (c as Label).text.contains("(computer) is playing"):
+					saw_banner = true
+			view._ai_tick(1.0)
+			continue
+		if not SimpleBot.step(b):
+			break
+		view._refresh()
+	assert_true(ai_turns > 10, "the computer took its turns (%d)" % ai_turns)
+	assert_true(saw_banner, "the panel says the computer is playing")
+	assert_true(b.round_no >= 2 or b.is_over(), "the battle progressed (round %d)" % b.round_no)
+	var setup: Control = load("res://view/battle_setup.tscn").instantiate()
+	_root().add_child(setup)
+	setup.played_by[1].select(2)
+	setup._on_start()
+	assert_eq(App.battle_config["ai"], ["", "easy"])
+	setup.queue_free()
+	view.queue_free()
+
+
+func test_computer_pace_pause_and_step() -> void:
+	App.battle_config = {"rosters": [Samples.roster("guild_mercenaries"), Samples.roster("verminkin")], "scenario": "a_deadly_encounter", "twist": 0, "seed": 4, "ai": ["normal", "normal"]}
+	App.load_battle_path = ""
+	var view = load("res://view/battle.tscn").instantiate()
+	_root().add_child(view)
+	var b: Battle = view.b
+	App.ai_speed = 3   # Paused
+	var n := b.history.size()
+	view._ai_tick(30.0)
+	assert_eq(b.history.size(), n, "paused: the computer waits")
+	view._ai_do_step()
+	assert_true(b.history.size() > n, "Step makes one computer step")
+	App.ai_speed = 1   # Normal: one tick right after a step must not take another
+	view._ai_do_step()
+	n = b.history.size()
+	view._ai_tick(0.1)
+	assert_eq(b.history.size(), n, "the computer pauses between steps")
+	view.queue_free()
+
+
+func test_log_names_in_team_colours() -> void:
+	App.battle_config = {"rosters": [Samples.roster("guild_mercenaries"), Samples.roster("verminkin")], "scenario": "a_deadly_encounter", "twist": 0, "seed": 2}
+	App.load_battle_path = ""
+	var view = load("res://view/battle.tscn").instantiate()
+	_root().add_child(view)
+	var b: Battle = view.b
+	var reds: Array = b.fighters.filter(func(f): return f.player == 0)
+	var blue: FighterState = b.fighters.filter(func(f): return f.player == 1)[0]
+	reds[0].name = "Bones I"
+	reds[1].name = "Bones III"
+	blue.name = "Wolfram"
+	b.player_names[0] = "Hauptmann Wolfram's Company"
+	view._name_count = -1
+	var c0 := App.player_color(0).lightened(0.3).to_html(false)
+	var c1 := App.player_color(1).lightened(0.3).to_html(false)
+	var t: String = view._colour_names("☠ Bones III is taken down by Wolfram. Bones I flees with Hauptmann Wolfram's Company.")
+	assert_true(t.contains("[color=#%s]Bones III[/color]" % c0), t)
+	assert_true(t.contains("[color=#%s]Bones I[/color] flees" % c0), "a shorter name isn't matched inside a longer one")
+	assert_true(t.contains("[color=#%s]Wolfram[/color]." % c1), t)
+	assert_true(t.contains("[color=#%s]Hauptmann Wolfram's Company[/color]" % c0), "the warband name wins over the fighter name inside it")
+	assert_false(view._colour_names("Wolframite").contains("[color"), "only whole names")
+	view.queue_free()
+
+
+func test_every_scenario_and_twist_has_a_description() -> void:
+	for sc in Scenario.ORDER:
+		assert_true(Scenario.description(sc).length() > 80, sc)
+		for tw in Scenario.TWISTS[sc]:
+			assert_true(Scenario.twist_description(tw).length() > 20, tw)
+
+
+func test_hovering_scenario_and_twist_shows_their_rules() -> void:
+	App.battle_config = {"rosters": [Samples.roster("guild_mercenaries"), Samples.roster("verminkin")], "scenario": "no_quarter", "twist": 0, "seed": 2}
+	App.load_battle_path = ""
+	var view = load("res://view/battle.tscn").instantiate()
+	_root().add_child(view)
+	assert_true(view.top_text.text.contains("[url=scenario]No Quarter[/url]"))
+	assert_true(view.top_text.text.contains("[url=twist]Rolling Fog[/url]"))
+	view._on_top_hover("scenario")
+	assert_true(view.tip.visible)
+	assert_true(view.tip_text.get_parsed_text().contains("domination mark"), view.tip_text.get_parsed_text())
+	view._on_top_hover("twist")
+	assert_true(view.tip_text.get_parsed_text().contains("fogs a random quarter"))
+	view.top_text.meta_hover_ended.emit("twist")
+	assert_false(view.tip.visible, "the tooltip hides when the mouse leaves")
+	view.queue_free()

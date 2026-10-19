@@ -1,6 +1,6 @@
 # Black Death City — Tabletop Simulator
 
-A 3D tabletop for **Black Death City**, Sam Pearson's narrative skirmish wargame. It runs the Playtest v1.03 rules for you. Two players share one screen and take turns ("hot-seat"). The game measures, rolls the dice, applies the rules, and tells you whose decision it is.
+A 3D tabletop for **Black Death City**, Sam Pearson's narrative skirmish wargame. It runs the Playtest v1.03 rules for you. Play alone against a computer opponent, or with two players sharing one screen and taking turns ("hot-seat"). The game measures, rolls the dice, applies the rules, and tells you whose decision it is.
 
 > This is an unofficial fan project for playtesting. Black Death City and its rules belong to Sam Pearson. Get the rulebook, warband roster and reference sheet at [blackdeathcity.com](https://www.blackdeathcity.com). The rulebook PDF is not included here.
 
@@ -57,6 +57,11 @@ The builder checks:
 On the **New Battle** screen:
 
 - **Player 1 / Player 2:** pick a sample warband or one you saved.
+- **Played by:** *Human*, or a computer opponent:
+  - *Computer (normal)* plans its turns. It goes for the scenario's objectives, charges what it can reach, shoots the most damaging target, picks up and carries off treasure, keeps shooters and casters away from danger, and parries blows that would hurt. Shooters with a weapon reaching over 15" climb ladders and walls to high ground and hold it while they have targets. Casters with attack spells blast from range instead of charging, and draw power when no enemy is within 6".
+  - *Computer (easy)* simply heads for the nearest enemy and attacks.
+
+  For a one-player game, set one side to a computer. Set both to Human for hot-seat, or both to Computer to watch a battle.
 - **Scenario:** one of the six from the book, or *Random* to roll a d6 as the book does.
 - **Twist:** a specific twist, or *Random*.
 - **Battlefield:** random ruins laid out for the scenario, or a layout you made in the Terrain Editor.
@@ -164,17 +169,26 @@ Click one of your fighters that hasn't activated yet (or use the buttons at the 
 
 ### Winning
 
-Each scenario has its own victory conditions, and the top bar keeps the score. In any scenario, a warband that **flees** loses. When the battle ends, the result is shown with options to start a new battle or return to the menu.
+Each scenario has its own victory conditions, and the top bar keeps the score. Hover over the scenario or twist name in the top bar to read what it means and how it is won. In any scenario, a warband that **flees** loses. When the battle ends, the result is shown with options to start a new battle or return to the menu.
+
+### Playing against the computer
+
+On the computer's turn, the action panel says it is playing, the camera follows its active fighter, and the panel lists what its **last step** did (the move, the dice, the hits). Its fighters slide along their path, and the path stays drawn on the table until its next step.
+
+Use **Computer:** in the top bar to set the pace: *Slow*, *Normal*, *Fast* or *Paused*. When paused, press **Step ▶** to watch it make one move, action or decision at a time. You can still orbit the camera and hover over fighters to read their profiles. When the computer attacks one of your fighters, you choose that fighter's weapons and duel moves as usual.
+
+The computer plays by exactly the same rules and dice as you do. It can't see anything the rules don't let a player know.
 
 ### Tools at the top right
 
-- **Undo:** undoes the current activation, until dice have been rolled.
+- **Undo:** undoes the current activation, until dice have been rolled. It isn't available during the computer's turn.
 - **Table tools:** for anything you agree to settle by hand, as at a real table:
   - move any fighter by clicking it and then the table;
   - change life, take a fighter down or bring it back;
   - toggle poisoned, hidden or activated, and clear effects.
 
   Every change is written to the log.
+- **Sound:** turns the sound effects on or off. You hear footsteps for moves, a whoosh for missed blows, a whiz for missed shots, a thud when a blow wounds, a clank when armour saves, a clash for parries, a bowstring for shots, and a heavy fall when a fighter is taken down. The setting is remembered.
 - **Dice:** roll 2d6 openly into the log.
 - **Save** and **Menu:** the battle also saves automatically after every activation. **Continue Saved Battle** on the main menu resumes it.
 
@@ -231,4 +245,4 @@ The rules engine is plain GDScript in `rules/`, and the 3D screens are in `view/
 godot --headless --path . --script res://tests/run_tests.gd
 ```
 
-`CLAUDE.md` describes the architecture, and `tools/` has scripts for bot-vs-bot battle reports and screenshots.
+`CLAUDE.md` describes the architecture, and `tools/` has scripts for bot-vs-bot battle reports (`ai_report.gd` compares the computer levels), battle logs and screenshots.

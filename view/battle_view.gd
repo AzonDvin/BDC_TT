@@ -1,10 +1,13 @@
 class_name BattleView
 extends Node
-## The battle screen: 3D table + HUD. Hot-seat: whoever's decision it is uses the mouse.
+## The battle screen: 3D table + HUD. Hot-seat: whoever's decision it is uses the mouse. A player set to Computer
+## (battle.cfg["ai"]) is played by AI.step, one step at a time at the pace picked in the top bar: moves slide along
+## their path and stay drawn, and the action panel shows what the last step did.
 ## Controls: left-click select/act (Alt+click aims at the floor under roofs and upper floors) · right-drag orbit ·
 ## middle-drag or WASD pan · wheel zoom · Enter confirm move · Backspace remove waypoint · Esc cancel.
 
 const SAVE_PATH := "user://battle_save.bdc"
+const AI_SPEEDS := [["Slow", 2.2], ["Normal", 1.3], ["Fast", 0.5], ["Paused", -1.0]]   # [label, seconds between steps]
 
 var b: Battle
 var board: Board3D
@@ -32,7 +35,18 @@ var tip: PanelContainer
 var tip_text: RichTextLabel
 var pickup_box: CheckBox
 var _last_active := -1
+var _name_re: RegEx               # matches any fighter or warband name in a log line (longest first)
+var _name_col := {}               # name -> colour hex
+var _name_count := -1
 var defend_store := {}           # the defending player's weapon choices while answering a melee attack
+var _ai_wait := 0.0
+var _ai_next := 0.0              # seconds before the computer's next step
+var _ai_active := -1
+var _ai_trail := {}              # {"pts": PackedVector2Array, "player", "z"}: the computer's last move, drawn on the table
+var _ai_lines: Array = []        # log lines from the computer's last step
+var ai_speed_opt: OptionButton
+var sfx: Sfx
+var ai_step_btn: Button
 
 
 func _ready() -> void:
@@ -48,11 +62,16 @@ func _ready() -> void:
 		if cfg.is_empty():
 			cfg = {"rosters": [Samples.roster("guild_mercenaries"), Samples.roster("verminkin")], "scenario": "", "twist": -1, "seed": -1}
 		b.setup(cfg["rosters"][0], cfg["rosters"][1], cfg["scenario"], cfg["twist"], cfg["seed"], cfg.get("layout", {}))
+		b.cfg["ai"] = cfg.get("ai", ["", ""])
 	b.changed.connect(_refresh)
 	b.logged.connect(_on_log)
 	board.build(b)
 	for line in b.history:
 		_on_log(line)
+	# Sound only for what happens from now on (not the replayed log of a loaded battle).
+	sfx = Sfx.new()
+	add_child(sfx)
+	b.logged.connect(sfx.on_log)
 	_refresh()
 
 
@@ -77,8 +96,24 @@ func _build_hud() -> void:
 	top_text.scroll_active = false
 	top_text.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	top_text.custom_minimum_size = Vector2(600, 0)
+	top_text.meta_hover_started.connect(_on_top_hover)
+	top_text.meta_hover_ended.connect(func(_m): tip.visible = false)
+	top_text.meta_clicked.connect(_on_top_hover)
 	th.add_child(top_text)
-	th.add_child(UI.button("Undo", func(): b.undo(); _set_mode("idle"), "Undo the current activation (only before any dice were rolled)"))
+	var speeds: Array = []
+	for s in AI_SPEEDS:
+		speeds.append("Computer: " + s[0])
+	ai_speed_opt = UI.option(speeds, App.ai_speed)
+	ai_speed_opt.tooltip_text = "How fast the computer plays. Paused: press Step to see it make one move or action at a time."
+	ai_speed_opt.item_selected.connect(func(i): App.ai_speed = i; App.save_settings(); _ai_next = 0.0; _refresh())
+	th.add_child(ai_speed_opt)
+	ai_step_btn = UI.button("Step ▶", func(): _ai_do_step(), "Let the computer make its next move, action or decision")
+	th.add_child(ai_step_btn)
+	var snd := UI.button("Sound", _toggle_sound, "Sound effects for moves, blows, misses, saves and parries")
+	snd.toggle_mode = true
+	snd.button_pressed = App.sound_on
+	th.add_child(snd)
+	th.add_child(UI.button("Undo", _undo, "Undo the current activation (only before any dice were rolled)"))
 	var tt := UI.button("Table tools", _toggle_table, "Move fighters freely, adjust life and statuses — for anything resolved by hand")
 	tt.toggle_mode = true
 	th.add_child(tt)
@@ -192,6 +227,10 @@ func _refresh() -> void:
 	if b.active >= 0 and b.active != _last_active:
 		selected = b.active
 	_last_active = b.active
+	var any_ai: bool = AI.is_ai(b, 0) or AI.is_ai(b, 1)
+	ai_speed_opt.visible = any_ai
+	ai_step_btn.visible = any_ai
+	ai_step_btn.disabled = not AI.should_act(b)
 	_update_top()
 	_update_rosters()
 	_update_card()
@@ -228,7 +267,8 @@ func _update_top() -> void:
 		who = "%s activating [b]%s[/b]%s" % [_pname(b.turn), b.active_fighter().name, " (surge)" if b.active_is_surge else ""]
 	elif b.phase == "activation":
 		who = "%s to activate a fighter" % _pname(b.turn)
-	top_text.text = "[b]%s[/b] · twist: %s · Round %d · priority %s · underdog %s\n%s   ·   %s" % [
+	# The scenario and twist names are links: hovering them shows what they mean (_on_top_hover).
+	top_text.text = "[b][url=scenario]%s[/url][/b] · twist: [url=twist]%s[/url] · Round %d · priority %s · underdog %s\n%s   ·   %s" % [
 		Scenario.display_name(sc.get("id", "")), Scenario.twist_name(sc.get("twist_id", "")), b.round_no, _pname(b.priority), _pname(b.underdog), who, score]
 
 
@@ -355,6 +395,21 @@ func _update_actions() -> void:
 		r.add_child(UI.button("New battle", func(): App.go("res://view/battle_setup.tscn")))
 		r.add_child(UI.button("Main menu", func(): App.go("res://view/main_menu.tscn")))
 		actions.add_child(r)
+		return
+	if AI.should_act(b) and not table_mode:
+		var who := AI.decider(b)
+		_header("%s (computer) is playing…" % b.player_names[who], who)
+		var f := b.active_fighter()
+		if f != null and f.player == who:
+			actions.add_child(UI.label("Activating " + UI.tagged_name(f), 15, App.PAPER))
+		if not _ai_lines.is_empty():
+			actions.add_child(UI.label("Last step:", 13, App.GOLD))
+			for line in _ai_lines.slice(-8):
+				var l := UI.label(str(line), 14, Color("ff8a70") if str(line).contains("☠") else App.PAPER)
+				l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+				actions.add_child(l)
+		if AI_SPEEDS[App.ai_speed][1] < 0:
+			actions.add_child(UI.label("Paused: press Step ▶ (top bar) for the next step, or pick a speed.", 13, Color(0.7, 0.65, 0.55)))
 		return
 	if not b.pending.is_empty():
 		_actions_pending()
@@ -946,6 +1001,110 @@ func _process(delta: float) -> void:
 		board.orbit(300 * delta, 0)
 	if v != Vector2.ZERO:
 		board.pan(v * 900 * delta)
+	_ai_tick(delta)
+
+
+func _toggle_sound() -> void:
+	App.sound_on = not App.sound_on
+	App.apply_sound()
+	App.save_settings()
+	_on_log("(Sound %s.)" % ("on" if App.sound_on else "off"))
+
+
+func _undo() -> void:
+	if AI.should_act(b):
+		return
+	b.undo()
+	_set_mode("idle")
+
+
+## Lets the computer player take its next step once the pause for the last one is over.
+func _ai_tick(delta: float) -> void:
+	if b == null or table_mode or not AI.should_act(b):
+		_ai_wait = 0.0
+		return
+	var pace: float = AI_SPEEDS[App.ai_speed][1]
+	if pace < 0.0:
+		return
+	_ai_wait += delta
+	if _ai_wait < maxf(_ai_next, pace * 0.5):
+		return
+	_ai_do_step()
+
+
+## One computer step: run it, then show what happened (camera, sliding move, trail, log lines) and set the pause.
+func _ai_do_step() -> void:
+	if b == null or not AI.should_act(b):
+		return
+	_ai_wait = 0.0
+	if mode != "idle":
+		_set_mode("idle", false)
+	var before := {}
+	for f in b.fighters:
+		before[f.uid] = [f.pos, f.elev, f.on_board()]
+	var log_from := b.history.size()
+	AI.last_move = {}
+	if not AI.step(b) and not SimpleBot.step(b):
+		# Nothing it can do (shouldn't happen): end the activation so the game can't hang.
+		if b.active >= 0 and b.pending.is_empty():
+			b.end_activation()
+	_ai_lines = b.history.slice(log_from)
+	var pace: float = absf(AI_SPEEDS[App.ai_speed][1])
+	var anim := 0.0
+	# Slide every fighter that moved (along the AI's path when it was its move, else straight).
+	for f in b.fighters:
+		var was: Array = before.get(f.uid, [f.pos, f.elev, false])
+		if not was[2] or not f.on_board() or (was[0] as Vector2).distance_to(f.pos) < 0.05:
+			continue
+		var pts: Array = [Vector3(was[0].x, was[1], was[0].y)]
+		var path2 := PackedVector2Array([was[0], f.pos])
+		if AI.last_move.get("uid", -1) == f.uid:
+			path2 = AI.last_move["path"]
+			var lv: PackedFloat32Array = AI.last_move.get("levels", PackedFloat32Array())
+			for i in range(1, path2.size() - 1):
+				pts.append(Vector3(path2[i].x, lv[i] if i < lv.size() else was[1], path2[i].y))
+		pts.append(Vector3(f.pos.x, f.elev, f.pos.y))
+		var secs := clampf(Geo.path_length(path2) * 0.12 * pace, 0.3, 2.5)
+		board.animate_path(f.uid, pts, secs)
+		anim = maxf(anim, secs)
+		if AI.is_ai(b, f.player):
+			_ai_trail = {"pts": path2, "player": f.player, "z": f.elev}
+	var f2 := b.active_fighter()
+	if f2 != null and f2.uid != _ai_active and AI.is_ai(b, f2.player) and f2.on_board():
+		board.focus(f2.pos)
+		_ai_trail = {}
+	_ai_active = f2.uid if f2 != null else -1
+	# Pause longer after dice and blows than after a quiet decision.
+	var busy := false
+	for line in _ai_lines:
+		var t := str(line)
+		if t.contains("rolls") or t.contains("fires") or t.contains("hits") or t.contains("attempts") or t.contains("☠"):
+			busy = true
+	_ai_next = anim + pace * (1.0 if busy or anim > 0.0 else 0.5)
+	_refresh()
+
+
+## Hover text for the scenario or twist name in the top bar.
+func _on_top_hover(meta: Variant) -> void:
+	var sc := b.scen
+	var title := ""
+	var body := ""
+	if str(meta) == "scenario":
+		title = Scenario.display_name(sc.get("id", ""))
+		body = Scenario.description(sc.get("id", ""))
+	elif str(meta) == "twist":
+		title = "Twist: " + Scenario.twist_name(sc.get("twist_id", ""))
+		body = Scenario.twist_description(sc.get("twist_id", ""))
+	if title == "":
+		return
+	tip_text.text = "[b][color=#%s]%s[/color][/b]\n%s" % [App.GOLD.to_html(false), title, body.replace("[", "[lb]")]
+	tip.reset_size()
+	var vp := get_viewport().get_visible_rect().size
+	var pos := get_viewport().get_mouse_position() + Vector2(16, 18)
+	pos.x = minf(pos.x, vp.x - tip.size.x - 4)
+	pos.y = minf(pos.y, vp.y - tip.size.y - 4)
+	tip.position = pos
+	tip.visible = true
 
 
 ## Floating profile of the fighter under the mouse, plus its distance from the activating (or selected) fighter.
@@ -971,6 +1130,10 @@ func _update_tip(mouse: Vector2) -> void:
 
 
 func _click(p: Vector2, level := 0.0, hit: FighterState = null, double := false) -> void:
+	if AI.should_act(b) and not table_mode:
+		if hit != null:
+			_select(hit.uid)   # inspecting fighters is fine while the computer plays
+		return
 	var pt: String = b.pending.get("type", "")
 	if table_mode:
 		if hit != null:
@@ -1122,6 +1285,11 @@ func _update_board() -> void:
 				lines.append({"pts": Board3D.circle(sel.pos, sel.radius + r, 96), "color": Color(0.9, 0.8, 0.4, 0.35), "closed": true})
 	if f:
 		highlight[f.uid] = Color("f2e6a0")
+	if not _ai_trail.is_empty() and (_ai_trail["pts"] as PackedVector2Array).size() >= 2:
+		var tp: PackedVector2Array = _ai_trail["pts"]
+		var tc := App.player_color(_ai_trail["player"]).lightened(0.3)
+		lines.append({"pts": tp, "color": tc, "z": _ai_trail["z"]})
+		lines.append({"pts": Board3D.circle(tp[0], 0.25), "color": tc, "closed": true, "z": _ai_trail["z"]})
 	# Targets
 	if mode == "shoot" and f:
 		var w := f.weapon_by_id(mode_data["weapon"])
@@ -1246,4 +1414,58 @@ func _on_log(text: String) -> void:
 		col = "#ff8a70"
 	elif text.begins_with("[Table]") or text.begins_with("[Dice]"):
 		col = "#a0c0ff"
-	log_box.append_text("[color=%s]%s[/color]\n" % [col, text.replace("[", "[lb]") if not text.begins_with("[") else text.replace("[", "[lb]")])
+	log_box.append_text("[color=%s]%s[/color]\n" % [col, _colour_names(text.replace("[", "[lb]"))])
+
+
+## Puts every fighter and warband name in a log line into its team colour.
+func _colour_names(t: String) -> String:
+	if b == null:
+		return t
+	if _name_count != b.fighters.size():
+		_build_name_regex()
+	if _name_re == null:
+		return t
+	var out := ""
+	var last := 0
+	for m in _name_re.search_all(t):
+		var n := m.get_string(1)
+		out += t.substr(last, m.get_start(1) - last) + "[color=#%s]%s[/color]" % [_name_col[n], n]
+		last = m.get_end(1)
+	return out + t.substr(last)
+
+
+func _build_name_regex() -> void:
+	_name_count = b.fighters.size()
+	_name_col = {}
+	var clash := {}
+	var named: Array = []
+	for p in 2:
+		named.append([b.player_names[p], p])
+	for f in b.fighters:
+		named.append([f.name, f.player])
+	for e in named:
+		var n: String = e[0]
+		var c := App.player_color(e[1]).lightened(0.3).to_html(false)
+		if n.strip_edges() == "" or n.contains("["):
+			continue
+		if _name_col.has(n) and _name_col[n] != c:
+			clash[n] = true   # the same name on both sides: leave it uncoloured rather than guess
+		_name_col[n] = c
+	for n in clash:
+		_name_col.erase(n)
+	var names: Array = _name_col.keys()
+	if names.is_empty():
+		_name_re = null
+		return
+	names.sort_custom(func(x, y): return x.length() > y.length())
+	var alts: PackedStringArray = []
+	for n in names:
+		alts.append(_regex_escape(n))
+	_name_re = RegEx.create_from_string("(?<![\\w])(" + "|".join(alts) + ")(?![\\w])")
+
+
+static func _regex_escape(s: String) -> String:
+	var out := ""
+	for ch in s:
+		out += ("\\" + ch) if ch in "\\.^$|?*+()[]{}-/" else ch
+	return out
