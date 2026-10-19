@@ -482,3 +482,24 @@ func test_hide_next_to_a_wall() -> void:
 	H.add(b2, VK, "verminkin_warrior", 1, Vector2(30, 30))
 	H.activate(b2, g)
 	assert_true(Combat.hide_problem(b2, g).contains("terrain"), "open ground: the reason is shown")
+
+
+func test_dice_are_fair_and_seeds_unpredictable() -> void:
+	var d := Dice.new(2024)
+	var counts := [0, 0, 0, 0, 0, 0, 0]
+	var n := 120000
+	for i in n:
+		counts[d.d6()] += 1
+	var chi := 0.0
+	for f in range(1, 7):
+		chi += pow(counts[f] - n / 6.0, 2) / (n / 6.0)
+	assert_true(chi < 20.5, "d6 chi-square %.1f (fair dice: well under 20.5)" % chi)
+	var b1 := Battle.new()
+	b1.setup(Samples.roster("verminkin"), Samples.roster("death_covens"), "a_deadly_encounter", 0)
+	var b2 := Battle.new()
+	b2.setup(Samples.roster("verminkin"), Samples.roster("death_covens"), "a_deadly_encounter", 0)
+	assert_true(b1.dice.rng.seed != b2.dice.rng.seed, "two random battles get different seeds")
+	assert_true(b1.history.any(func(l): return l.begins_with("Dice seed:")), "the seed is logged for replays")
+	var b3 := Battle.new()
+	b3.setup(Samples.roster("verminkin"), Samples.roster("death_covens"), "a_deadly_encounter", 0, b1.dice.rng.seed)
+	assert_eq(b3.terrain.size(), b1.terrain.size(), "same seed, same battle")

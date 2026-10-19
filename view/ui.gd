@@ -71,6 +71,15 @@ static func num(v) -> String:
 	return str(v)
 
 
+const TYPE_TAGS := {"leader": "L", "champion": "C", "henchman": "H", "brute": "Br", "beast": "Bs"}
+const TYPE_NAMES := {"leader": "Leader", "champion": "Champion", "henchman": "Henchman", "brute": "Brute", "beast": "Beast"}
+
+
+## A fighter's display name with its type tag, e.g. "[L] Wolfram" (display only; the stored name is unchanged).
+static func tagged_name(f: FighterState) -> String:
+	return "[%s] %s" % [TYPE_TAGS.get(f.category, "?"), f.name]
+
+
 static func weapon_line(w: Dictionary) -> String:
 	var rng := ""
 	if w.has("range"):

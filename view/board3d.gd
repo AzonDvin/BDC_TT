@@ -422,7 +422,7 @@ func sync(selected := -1, active := -1, highlight := {}) -> void:
 			tags.append("HIT")
 		if f.statuses.get("drawn_power", false):
 			tags.append("power")
-		label.text = "%s\n♥%d/%d%s" % [f.name, f.life, f.max_life(), ("  " + " ".join(tags)) if not tags.is_empty() else ""]
+		label.text = "%s\n♥%d/%d%s" % [UI.tagged_name(f), f.life, f.max_life(), ("  " + " ".join(tags)) if not tags.is_empty() else ""]
 		label.modulate = App.player_color(f.player).lightened(0.35) if not f.is_bloodied() else Color("ff8060")
 	for c in token_root.get_children():
 		c.queue_free()

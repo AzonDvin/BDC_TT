@@ -46,7 +46,11 @@ var _next_uid := 1
 # Setup
 
 func setup(r0: Roster, r1: Roster, scenario_id: String, twist := -1, seed_value := -1, layout: Dictionary = {}) -> void:
-	dice = Dice.new(seed_value if seed_value >= 0 else int(Time.get_ticks_usec() % 2147483647))
+	if seed_value < 0:
+		# A fresh, unpredictable seed from the operating system's cryptographic random source.
+		seed_value = Crypto.new().generate_random_bytes(8).decode_s64(0) & 0x7FFFFFFFFFFFFFFF
+	dice = Dice.new(seed_value)
+	log_line("Dice seed: %d (enter it on the New Battle screen to replay these exact dice)." % seed_value)
 	rosters = [r0.to_dict(), r1.to_dict()]
 	player_names = [r0.name, r1.name]
 	fighters.clear()

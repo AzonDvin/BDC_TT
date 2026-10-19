@@ -249,7 +249,7 @@ func _update_rosters() -> void:
 					state = "escaped"
 				_:
 					state = "♥%d/%d" % [f.life, f.max_life()] + (" ✓" if f.activated else "") + (" ⟳" if f.surged else "")
-			var btn := UI.button("%s  %s" % [f.name, state], func(): _select(f.uid, true))
+			var btn := UI.button("%s  %s" % [UI.tagged_name(f), state], func(): _select(f.uid, true))
 			btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
 			btn.add_theme_font_size_override("font_size", 13)
 			btn.flat = f.uid != selected
@@ -270,7 +270,7 @@ func _update_card() -> void:
 ## otherwise a compact version for the hover tooltip.
 func _fighter_text(f: FighterState, full: bool) -> String:
 	var s: Dictionary = f.stats
-	var t := "[b][color=#%s]%s[/color][/b]  [color=#a89e88]%s[/color]\n" % [App.player_color(f.player).to_html(false), f.name, Catalog.fighter_def(f.faction, f.def_id).get("name", "")]
+	var t := "[b][color=#%s]%s[/color][/b]  [color=#a89e88]%s · %s[/color]\n" % [App.player_color(f.player).to_html(false), UI.tagged_name(f).replace("[", "[lb]"), Catalog.fighter_def(f.faction, f.def_id).get("name", ""), UI.TYPE_NAMES.get(f.category, "")]
 	t += "[color=#a89e88]%s[/color]\n" % ", ".join(f.keywords)
 	var arm := Effects.armour_value(b, f) if f.on_board() else int(s["armour"])
 	t += "[code]Mv %s  Bl %s  Bw %s  Ar %s  In %s  Wp %s  Life %d/%d[/code]\n" % [_num(s["move"]), _tn(s["blade"]), _tn(s["bow"]), "-" if arm >= 7 else "%d+" % arm, _num(s["initiative"]), _num(s["willpower"]), f.life, f.max_life()]
@@ -384,7 +384,7 @@ func _actions_pick_fighter() -> void:
 	_header("%s: choose a fighter to activate (click one on the table or below)." % b.player_names[b.turn], b.turn)
 	var btns: Array = []
 	for f in b.can_activate_normally(b.turn):
-		btns.append(UI.button(f.name, func(): _do(b.activate(f.uid))))
+		btns.append(UI.button(UI.tagged_name(f), func(): _do(b.activate(f.uid))))
 	_row(btns)
 
 
@@ -401,39 +401,45 @@ func _actions_activation() -> void:
 	if mode == "melee_setup":
 		_actions_melee_setup(f)
 		return
-	var engaged := Effects.is_engaged(b, f)
+	# Buttons come from Options.for_active (the same rules the QA tests check). Unavailable options stay
+	# visible but greyed out, with the reason on hover, so players can see why.
+	var opts := Options.for_active(b)
 	var lim := " (move OR action only)" if b.move_or_action_only(f) else ""
-	_header("%s activating %s%s" % [b.player_names[p], f.name, lim], p)
+	_header("%s activating %s%s" % [b.player_names[p], UI.tagged_name(f), lim], p)
+	var move_labels := {"normal": "Normal move (%s\")" % _num(f.stats["move"]), "run": "Run (+d6\")", "charge": "Charge (+d6\")", "disengage": "Disengage (Init test, 3\")"}
+	var move_help := {"normal": "Move up to the Move value; can't come within 1\" of an enemy.", "run": "Move +d6\"; no action this activation afterwards.",
+		"charge": "Move +d6\"; must end within 1\" of an enemy or the activation ends.", "disengage": "Initiative test, then up to 3\", ending more than 1\" from all enemies."}
 	var mv: Array = []
-	if b.can_still_move(f):
-		if engaged:
-			mv.append(UI.button("Disengage (Init test, 3\")", func(): _declare("disengage")))
-		else:
-			mv.append(UI.button("Normal move (%s\")" % f.stats["move"], func(): _declare("normal")))
-			if not f.acted:
-				mv.append(UI.button("Run (+d6\")", func(): _declare("run"), "No action this activation afterwards"))
-				mv.append(UI.button("Charge (+d6\")", func(): _declare("charge"), "Must end within 1\" of an enemy or the activation ends"))
-	if not mv.is_empty():
-		actions.add_child(UI.label("MOVE", 13, App.GOLD))
-		_row(mv)
+	for kind in Options.MOVES:
+		var why: String = opts["moves"][kind]
+		var bt := UI.button(move_labels[kind], func(): _declare(kind), move_help[kind] + ("" if why == "" else "\nNot now: " + why))
+		bt.disabled = why != ""
+		mv.append(bt)
+	actions.add_child(UI.label("MOVE", 13, App.GOLD))
+	_row(mv)
 	var act: Array = []
-	if b.can_still_act(f):
-		if engaged:
-			act.append(UI.button("Melee attack", func(): _set_mode("melee_setup")))
-		for w in f.usable_ranged():
-			var err := Combat.check_can_shoot(b, f, w)
-			var bt := UI.button("Shoot %s" % w["name"], func(): _start_shoot(w), UI.weapon_line(w) + ("\n" + err if err != "" else ""))
-			bt.disabled = err != ""
-			act.append(bt)
-		if not engaged:
-			var why := Combat.hide_problem(b, f)
-			var hb := UI.button("Hide" if why == "" else "Hide — %s" % why, func(): _do(Combat.hide(b)), "Hide (p.27): touching terrain, not engaged, and more than 3\" from all enemies.")
-			hb.disabled = why != ""
-			act.append(hb)
-		if f.is_caster() and Magic.can_use_arcane(b, f) == "":
-			act.append(UI.button("Draw power", func(): _do(Magic.draw_power(b)), "+1 casting die next activation"))
-			for sp in f.prepared:
-				act.append(UI.button("Cast %s (%d+)" % [sp["name"], sp["casting"]], func(): _start_spell(sp), sp["text"]))
+	var mw: String = opts["actions"]["melee"]
+	var mb := UI.button("Melee attack", func(): _set_mode("melee_setup"), "Attack an enemy you are engaged with." + ("" if mw == "" else "\nNot now: " + mw))
+	mb.disabled = mw != ""
+	act.append(mb)
+	for w in f.usable_ranged():
+		var err: String = opts["actions"].get("shoot:" + w["id"], "")
+		var bt2 := UI.button("Shoot %s" % w["name"], func(): _start_shoot(w), UI.weapon_line(w) + ("" if err == "" else "\nNot now: " + err))
+		bt2.disabled = err != ""
+		act.append(bt2)
+	var hw: String = opts["actions"]["hide"]
+	var hb := UI.button("Hide" if hw == "" else "Hide — %s" % hw, func(): _do(Combat.hide(b)), "Hide (p.27): touching terrain, not engaged, and more than 3\" from all enemies.")
+	hb.disabled = hw != ""
+	act.append(hb)
+	if f.is_caster():
+		var aw: String = opts["actions"].get("draw_power", "")
+		var dp := UI.button("Draw power", func(): _do(Magic.draw_power(b)), "+1 casting die next activation" + ("" if aw == "" else "\nNot now: " + aw))
+		dp.disabled = aw != ""
+		act.append(dp)
+		for sp in f.prepared:
+			var cs := UI.button("Cast %s (%d+)" % [sp["name"], int(sp["casting"])], func(): _start_spell(sp), sp["text"] + ("" if aw == "" else "\nNot now: " + aw))
+			cs.disabled = aw != ""
+			act.append(cs)
 	for wid in f.needs_reload:
 		if b.can_still_move(f):
 			act.append(UI.button("Reload %s (forgo move)" % f.weapon_by_id(wid).get("name", wid), func(): _do(Combat.reload_weapon(b, wid, "move"))))
@@ -574,7 +580,7 @@ func _actions_pending() -> void:
 			_header("%s has no fighters left to activate. Make a surge activation (1 move or 1 action) or pass?" % b.player_names[who], who)
 			var btns: Array = []
 			for f in b.can_surge(who):
-				btns.append(UI.button("Surge: " + f.name, func(): _do(b.respond({"uid": f.uid}))))
+				btns.append(UI.button("Surge: " + UI.tagged_name(f), func(): _do(b.respond({"uid": f.uid}))))
 			btns.append(UI.button("Pass for this round", func(): _do(b.respond({"pass": true}))))
 			_row(btns)
 		"flee_test":
