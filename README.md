@@ -91,6 +91,38 @@ Some of these ask a player to choose, such as which entry point to take.
 - **Bottom:** the actions and decisions available right now.
 - **Hover over any fighter** to see a quick profile, its distance from the activating fighter, and whether that fighter can see it or it's in cover.
 
+### Figures
+
+Fighters are shown as figures from the free KayKit Adventurers pack:
+
+| Fighter | Figure |
+|---|---|
+| Wizards and Priests | Mage |
+| Leaders | Knight |
+| Champions | Barbarian |
+| Henchmen with a bow or crossbow | Ranger |
+| Other henchmen | Rogue or Hooded Rogue |
+| Brutes | A big stone-grey Skeleton Warrior (golem-like) |
+| Vampyres (Bloodcursed, Misbegotten) | Skeleton Mage |
+| Vampyres (Bloodcursed, Misbegotten) | Skeleton Mage |
+| Skeletons (Death Covens) | Skeleton Warriors and Minions; Skeleton Mage or Rogue for skeleton casters and crossbowmen |
+| Zombies | Green Skeleton Minions that shamble |
+| Lycanfell Beast | A fur-tinted Barbarian (the figure changes when the noble transforms) |
+| Blighted Cloister demons | Rot Demons are red imps, the Rot-Herald a blue demon, the Rotspawn a spiky one-eyed blob, the Rot-Colossal a hulking yeti, Rotlings small green blobs and Bloat Flies buzzing bees |
+| Darkcloven Beastmen and Shamans | A club-wielding orc, and a masked tribal shaman |
+| Mercenary Ogre, Zombie Ogre | A blocky Giant (the Zombie Ogre in zombie green) |
+| Hunting Dogs, Dire Wolves, Dire Bats | Huskies, pale wolves, and a bat-winged creature |
+| Gargoyle | A horned, bat-winged flyer |
+| Giant Rats and Rat-Mutants | Rats, the Rat-Mutant big and dark |
+
+They hold their weapons (swords, axes, daggers, staffs, bows, crossbows and shields), face the way they move or the enemy they fight, walk or run along their moves, flinch when wounded, and fall when taken down.
+
+Attacks are shown on the table: arrows and crossbow bolts fly to the target (or past it on a miss), spells fire glowing bolts, blasts explode and flames roar along their template. Melee fighters lunge with each blow. Results rise above the fighters ("-2", "SAVED", "MISS", "PARRIED"), with sparks on armour and parries, a red burst on a wound and a camera shake on a critical hit. On the computer's turn the camera frames the attacker and its target.
+
+Figures swing, chop and stab with one-handed, two-handed or paired weapons (claws and bites punch and kick), block parries, draw and loose bows, shoot crossbows and pistols, throw slings and bombs, cast spells, channel power, reload, and dodge shots that miss them. These come from the [KayKit Character Animations](https://kaylousberg.itch.io/kaykit-character-animations) pack in `assets/kaykit_character_animations/`; without it, fighters lunge instead.
+
+The base shows the team colour; activated fighters are darkened. Skeletons carry bone weapons, crawl up out of the ground when they arrive or Rise Again, and collapse when taken down. Creatures bring their own idle, walk, run, attack, hit and death animations, and flyers hover above their bases. Weapons the packs don't have (guns, claws) aren't shown; the Rolling-Contraption is a stone-grey stand-in.
+
 ### Camera
 
 | Control | Action |
@@ -169,7 +201,7 @@ Click one of your fighters that hasn't activated yet (or use the buttons at the 
 
 ### Winning
 
-Each scenario has its own victory conditions, and the top bar keeps the score. Hover over the scenario or twist name in the top bar to read what it means and how it is won. In any scenario, a warband that **flees** loses. When the battle ends, the result is shown with options to start a new battle or return to the menu.
+Each scenario has its own victory conditions, and the top bar keeps the score. Hover over the scenario or twist name in the top bar to read what it means and how it is won. In any scenario, a warband that **flees** loses, and so does a warband with nobody left in the battle: every fighter taken down (or escaped), with none in reserve. If both are wiped out together, it's a draw. When the battle ends, the result is shown with options to start a new battle or return to the menu.
 
 ### Playing against the computer
 
@@ -234,6 +266,13 @@ The playtest leaves some things open, and a computer has to decide them. The mai
 - **The campaign rules** (injuries, experience, income) aren't in Playtest v1.03, so the simulator plays single battles.
 
 Everything that happens is written to the battle log, with the dice rolled, so any result can be checked against the book.
+
+---
+
+## Credits
+
+Fighter figures and animations: [KayKit Adventurers](https://kaylousberg.itch.io/kaykit-adventurers), [KayKit Skeletons](https://kaylousberg.itch.io/kaykit-skeletons) and [KayKit Character Animations](https://kaylousberg.itch.io/kaykit-character-animations) by Kay Lousberg (www.kaylousberg.com), CC0.
+Creatures: [Ultimate Monsters](https://poly.pizza/bundle/Ultimate-Monsters-Bundle-5oyGWAmOB6), [Ultimate Animated Animals](https://quaternius.com/packs/ultimateanimatedanimals.html), [Rat](https://poly.pizza/m/iltq5bVNaV) and [Giant](https://poly.pizza/m/BldaiPtyJa) by Quaternius (quaternius.com), CC0.
 
 ---
 

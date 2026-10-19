@@ -261,6 +261,30 @@ func _has_banner(p: int) -> bool:
 	return false
 
 
+## Simulator ruling: a warband with nobody left in the battle (every fighter taken down or escaped, none in reserve
+## and none about to Rise Again) loses at once, even if it never takes a flee test (Street of Death's Defender,
+## Defiant Stand). Both wiped out together is a draw. Returns true if the battle ended.
+func check_wipeout() -> bool:
+	if is_over():
+		return true
+	var left := [0, 0]
+	var down := [0, 0]
+	for f in fighters:
+		if f.where in ["board", "reserve"] or (f.where == "down" and f.statuses.has("rise_again_marker") and not "rise_again" in f.once_per_battle):
+			left[f.player] += 1
+		elif f.where == "down":
+			down[f.player] += 1
+	if left[0] > 0 and left[1] > 0:
+		return false
+	if left[0] == 0 and left[1] == 0:
+		end_battle(-1, "Both warbands have been wiped out.")
+		return true
+	var p := 0 if left[0] == 0 else 1
+	var how := "the whole warband has been taken down" if down[p] > 0 and down[p] == fighters.filter(func(x): return x.player == p).size() else "no fighters are left in the battle"
+	end_battle(other(p), "%s is wiped out: %s." % [player_names[p], how])
+	return true
+
+
 func end_battle(win: int, text: String) -> void:
 	winner = win
 	result_text = text

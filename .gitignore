@@ -1,3 +1,42 @@
 .godot/
 *.import
 *.pdf
+# KayKit pack: only the glTF models, animations, weapons and textures are used (FBX/OBJ copies and previews skipped)
+assets/kaykit_adventurers/**/fbx/
+assets/kaykit_adventurers/**/fbx(unity)/
+assets/kaykit_adventurers/**/obj/
+assets/kaykit_adventurers/**/Samples/
+assets/kaykit_adventurers/**/contents.png
+assets/kaykit_adventurers/**/*.url
+# KayKit animation pack: only the Rig_Medium combat and advanced-movement clips are used
+assets/kaykit_character_animations/**/fbx/
+assets/kaykit_character_animations/**/Rig_Large/
+assets/kaykit_character_animations/**/Mannequin Character/
+assets/kaykit_character_animations/**/*.url
+assets/kaykit_character_animations/**/Rig_Medium_General.glb
+assets/kaykit_character_animations/**/Rig_Medium_MovementBasic.glb
+assets/kaykit_character_animations/**/Rig_Medium_Simulation.glb
+assets/kaykit_character_animations/**/Rig_Medium_Tools.glb
+# KayKit Skeletons: only the glTF characters, weapons and texture are used
+assets/KayKit_Skeletons/**/fbx/
+assets/KayKit_Skeletons/**/fbx(unity)/
+assets/KayKit_Skeletons/**/obj/
+assets/KayKit_Skeletons/samples/
+assets/KayKit_Skeletons/Animations/
+assets/KayKit_Skeletons/contents.png
+assets/KayKit_Skeletons/*.url
+# Quaternius creatures: only the models mapped in view/fighter_models.gd (CREATURES) are kept in git
+assets/quaternius_monsters/*
+!assets/quaternius_monsters/Demon-LnfIziKv4o.glb
+!assets/quaternius_monsters/Blue_Demon.glb
+!assets/quaternius_monsters/Green_Spiky_Blob.glb
+!assets/quaternius_monsters/Yeti-ceRHrn8HHE.glb
+!assets/quaternius_monsters/Green_Blob.glb
+!assets/quaternius_monsters/Armabee.glb
+!assets/quaternius_monsters/Orc.glb
+!assets/quaternius_monsters/Tribal.glb
+!assets/quaternius_monsters/Goleling_Evolved.glb
+!assets/quaternius_monsters/Dragon.glb
+assets/quaternius_animals/*
+!assets/quaternius_animals/Husky.gltf
+!assets/quaternius_animals/Wolf.gltf

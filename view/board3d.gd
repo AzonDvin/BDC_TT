@@ -30,6 +30,10 @@ func build(b: Battle) -> void:
 		c.queue_free()
 	fighter_nodes.clear()
 	terrain_nodes.clear()
+	_shade_cache.clear()
+	_last_seen.clear()
+	_dying.clear()
+	_moving.clear()
 	_environment()
 	_ground()
 	for t in b.terrain:
@@ -345,6 +349,47 @@ func _make_fighter(f: FighterState) -> Node3D:
 	bm.albedo_color = App.player_color(f.player)
 	base.material_override = bm
 	root.add_child(base)
+	var top := f.height
+	var model := FighterModels.build(f)
+	if model != null:
+		model.position.y = 0.12
+		root.add_child(model)
+		_shade_cache[f.uid] = _model_meshes(model)
+	else:
+		top = _make_pill(f, root, bm)
+	var ring := MeshInstance3D.new()
+	var rt := TorusMesh.new()
+	rt.inner_radius = f.radius + 0.06
+	rt.outer_radius = f.radius + 0.2
+	ring.mesh = rt
+	ring.position.y = 0.05
+	var rm := StandardMaterial3D.new()
+	rm.albedo_color = App.GOLD
+	rm.emission_enabled = true
+	rm.emission = App.GOLD
+	rm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	ring.material_override = rm
+	ring.name = "Ring"
+	ring.visible = false
+	root.add_child(ring)
+	var label := Label3D.new()
+	label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	label.no_depth_test = true
+	label.fixed_size = true          # the same size on screen however far the camera is
+	label.pixel_size = 0.0009
+	label.font_size = 26
+	label.outline_size = 10
+	label.position.y = 0.4 + top + 0.5
+	label.name = "Label"
+	root.add_child(label)
+	add_child(root)
+	_last_seen[f.uid] = {"pos": f.pos, "life": f.life, "on": f.on_board()}
+	root.set_meta("look", FighterModels.look_key(f))
+	return root
+
+
+## The plain figure (a pill with a team-coloured band) for fighters without a model. Returns its height.
+func _make_pill(f: FighterState, root: Node3D, bm: StandardMaterial3D) -> float:
 	var body := MeshInstance3D.new()
 	var cap := CapsuleMesh.new()
 	cap.radius = f.radius * 0.5
@@ -364,32 +409,36 @@ func _make_fighter(f: FighterState) -> Node3D:
 	head_band.position.y = 0.12 + cap.height * 0.85
 	head_band.material_override = bm
 	root.add_child(head_band)
-	var ring := MeshInstance3D.new()
-	var rt := TorusMesh.new()
-	rt.inner_radius = f.radius + 0.06
-	rt.outer_radius = f.radius + 0.2
-	ring.mesh = rt
-	ring.position.y = 0.05
-	var rm := StandardMaterial3D.new()
-	rm.albedo_color = App.GOLD
-	rm.emission_enabled = true
-	rm.emission = App.GOLD
-	rm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	ring.material_override = rm
-	ring.name = "Ring"
-	ring.visible = false
-	root.add_child(ring)
-	var label := Label3D.new()
-	label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
-	label.no_depth_test = true
-	label.pixel_size = 0.016
-	label.font_size = 34
-	label.outline_size = 10
-	label.position.y = 0.4 + cap.height + 0.5
-	label.name = "Label"
-	root.add_child(label)
-	add_child(root)
-	return root
+	return cap.height
+
+
+var _shade_cache := {}           # uid -> [MeshInstance3D] of a model (for the activated darkening)
+var _last_seen := {}             # uid -> {"pos", "life", "on"}: to notice moves, wounds and take-downs
+var _dying := {}                 # uid -> true while a death animation plays
+var _dark_mat: StandardMaterial3D
+
+
+static func _model_meshes(model: Node3D) -> Array:
+	return model.find_children("*", "MeshInstance3D", true, false)
+
+
+## Darkens a model that has activated this round (the pill does this with its colour).
+func _shade_model(uid: int, dark: bool) -> void:
+	if _dark_mat == null:
+		_dark_mat = StandardMaterial3D.new()
+		_dark_mat.albedo_color = Color(0, 0, 0, 0.5)
+		_dark_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		_dark_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	for m in _shade_cache.get(uid, []):
+		if is_instance_valid(m):
+			(m as MeshInstance3D).material_overlay = _dark_mat if dark else null
+
+
+## Turns a figure to face a point on the table (battle x, y).
+static func _face(n: Node3D, from: Vector2, to: Vector2) -> void:
+	var m: Node3D = n.get_node_or_null("Model")
+	if m != null and from.distance_to(to) > 0.05:
+		m.rotation.y = atan2(to.x - from.x, to.y - from.y)
 
 
 var _moving := {}                # uid -> Tween while a fighter slides along its move
@@ -408,21 +457,42 @@ func animate_path(uid: int, pts: Array, seconds: float) -> void:
 	if _moving.has(uid):
 		(_moving[uid] as Tween).kill()
 	n.position = pts[0]
+	var model: Node3D = n.get_node_or_null("Model")
+	if model != null:
+		var mover := battle.fighter(uid) if battle != null else null
+		if mover != null:
+			FighterModels.play_loop(model, FighterModels.walk_clip(model, mover, total / maxf(seconds, 0.01) > 4.5))
 	var tw := create_tween()
 	for i in range(1, pts.size()):
-		tw.tween_property(n, "position", pts[i], seconds * (pts[i - 1] as Vector3).distance_to(pts[i]) / total)
+		var a: Vector3 = pts[i - 1]
+		var c: Vector3 = pts[i]
+		tw.tween_callback(func(): _face(n, Vector2(a.x, a.z), Vector2(c.x, c.z)))
+		tw.tween_property(n, "position", c, seconds * a.distance_to(c) / total)
 	_moving[uid] = tw
-	tw.finished.connect(func(): _moving.erase(uid))
+	tw.finished.connect(func():
+		_moving.erase(uid)
+		if model != null and is_instance_valid(model) and not _dying.has(uid):
+			FighterModels.play_loop(model, FighterModels.idle_clip(model)))
 
 
 func sync(selected := -1, active := -1, highlight := {}) -> void:
 	for f in battle.fighters:
 		var n: Node3D = fighter_nodes.get(f.uid)
+		if n != null and String(n.get_meta("look", "")) != FighterModels.look_key(f) and not _dying.has(f.uid):
+			n.queue_free()   # a different figure now (the Lycanfell transforming, and back)
+			_shade_cache.erase(f.uid)
+			n = null
 		if n == null:
 			n = _make_fighter(f)
 			fighter_nodes[f.uid] = n
-		n.visible = f.on_board()
-		if not _moving.has(f.uid):
+		var seen: Dictionary = _last_seen.get(f.uid, {"pos": f.pos, "life": f.life, "on": f.on_board()})
+		var model: Node3D = n.get_node_or_null("Model")
+		if model != null:
+			_animate_changes(f, n, model, seen)
+		elif not _dying.has(f.uid):
+			n.visible = f.on_board()
+		_last_seen[f.uid] = {"pos": f.pos, "life": f.life, "on": f.on_board()}
+		if not _moving.has(f.uid) and f.on_board():
 			n.position = Vector3(f.pos.x, f.elev, f.pos.y)
 		var ring: MeshInstance3D = n.get_node("Ring")
 		ring.visible = f.uid == selected or f.uid == active or highlight.has(f.uid)
@@ -430,10 +500,13 @@ func sync(selected := -1, active := -1, highlight := {}) -> void:
 		var rc: Color = highlight.get(f.uid, App.GOLD if f.uid != active else Color("f2e6a0"))
 		rm.albedo_color = rc
 		rm.emission = rc
-		var body: MeshInstance3D = n.get_node("Body")
-		var bmat := body.material_override as StandardMaterial3D
-		var tint: Color = FACTION_TINT.get(f.faction, Color.GRAY)
-		bmat.albedo_color = tint.darkened(0.55) if f.activated and f.uid != active else tint
+		var body: MeshInstance3D = n.get_node_or_null("Body")
+		if body != null:
+			var bmat := body.material_override as StandardMaterial3D
+			var tint: Color = FACTION_TINT.get(f.faction, Color.GRAY)
+			bmat.albedo_color = tint.darkened(0.55) if f.activated and f.uid != active else tint
+		else:
+			_shade_model(f.uid, f.activated and f.uid != active)
 		var label: Label3D = n.get_node("Label")
 		var tags: PackedStringArray = []
 		if f.statuses.get("hidden", false):
@@ -464,6 +537,51 @@ func sync(selected := -1, active := -1, highlight := {}) -> void:
 		mi.material_override = m
 		mi.position = Vector3(t["pos"].x, float(t.get("elev", 0.0)) + 0.13, t["pos"].y)
 		token_root.add_child(mi)
+
+
+## Model reactions to what changed since the last sync: a death animation before vanishing, a flinch when
+## wounded, and turning to face the enemy it is fighting or the way it last moved.
+func _animate_changes(f: FighterState, n: Node3D, model: Node3D, seen: Dictionary) -> void:
+	if seen["on"] and not f.on_board():
+		if f.where == "down" and not _dying.has(f.uid):
+			_dying[f.uid] = true
+			n.visible = true
+			FighterModels.play_once(model, FighterModels.death_clip(model), true)
+			var tw := create_tween()
+			tw.tween_interval(1.6)
+			tw.tween_callback(func():
+				_dying.erase(f.uid)
+				if not f.on_board():
+					n.visible = false)
+		elif not _dying.has(f.uid):
+			n.visible = false
+		return
+	if not f.on_board():
+		if not _dying.has(f.uid):
+			n.visible = false
+		return
+	if not seen["on"]:
+		# Arriving, summoned or rising again: skeletons claw their way up out of the ground; others just stand.
+		var rise := FighterModels.rise_clip(model)
+		if rise != "":
+			FighterModels.play_once(model, rise)
+		else:
+			FighterModels.play_loop(model, FighterModels.idle_clip(model))
+	n.visible = true
+	if f.life < int(seen["life"]):
+		FighterModels.play_once(model, FighterModels.hit_clip(model))
+	# Face the duel opponent, else the nearest enemy in melee with it, else the way it last moved.
+	var foe: FighterState = null
+	if not battle.duel.is_empty() and f.uid in [battle.duel["att"], battle.duel["def"]]:
+		foe = battle.fighter(battle.duel["def"] if f.uid == battle.duel["att"] else battle.duel["att"])
+	else:
+		for o in Effects.engaged_enemies(battle, f):
+			if foe == null or Effects.dist(f, o) < Effects.dist(f, foe):
+				foe = o
+	if foe != null:
+		_face(n, f.pos, foe.pos)
+	elif not _moving.has(f.uid) and (seen["pos"] as Vector2).distance_to(f.pos) > 0.05:
+		_face(n, seen["pos"], f.pos)
 
 
 # --- Overlays -----------------------------------------------------------------------------------

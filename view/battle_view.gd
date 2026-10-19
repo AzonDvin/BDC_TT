@@ -39,6 +39,9 @@ var _name_re: RegEx               # matches any fighter or warband name in a log
 var _name_col := {}               # name -> colour hex
 var _name_count := -1
 var defend_store := {}           # the defending player's weapon choices while answering a melee attack
+var _top_panel: Control
+var _left_panel: Control
+var _card_panel: Control
 var _ai_wait := 0.0
 var _ai_next := 0.0              # seconds before the computer's next step
 var _ai_active := -1
@@ -46,6 +49,7 @@ var _ai_trail := {}              # {"pts": PackedVector2Array, "player", "z"}: t
 var _ai_lines: Array = []        # log lines from the computer's last step
 var ai_speed_opt: OptionButton
 var sfx: Sfx
+var fx: CombatFx
 var ai_step_btn: Button
 
 
@@ -72,6 +76,10 @@ func _ready() -> void:
 	sfx = Sfx.new()
 	add_child(sfx)
 	b.logged.connect(sfx.on_log)
+	fx = CombatFx.new()
+	add_child(fx)
+	fx.setup(b, board)
+	b.logged.connect(fx.on_log)
 	_refresh()
 
 
@@ -87,6 +95,7 @@ func _build_hud() -> void:
 	layer.add_child(root)
 
 	var top := PanelContainer.new()
+	_top_panel = top
 	top.set_anchors_preset(Control.PRESET_TOP_WIDE)
 	var th := UI.hbox(10)
 	top.add_child(th)
@@ -124,6 +133,7 @@ func _build_hud() -> void:
 
 	var left := UI.vbox(6)
 	left.position = Vector2(8, 58)
+	_left_panel = left
 	left.custom_minimum_size = Vector2(300, 0)
 	root.add_child(left)
 	for p in 2:
@@ -158,6 +168,7 @@ func _build_hud() -> void:
 	cardp.offset_left = -380
 	cardp.offset_right = -8
 	cardp.offset_top = 58
+	_card_panel = cardp
 	var cs := ScrollContainer.new()
 	cs.custom_minimum_size = Vector2(360, 440)
 	cs.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
@@ -270,6 +281,16 @@ func _update_top() -> void:
 	# The scenario and twist names are links: hovering them shows what they mean (_on_top_hover).
 	top_text.text = "[b][url=scenario]%s[/url][/b] · twist: [url=twist]%s[/url] · Round %d · priority %s · underdog %s\n%s   ·   %s" % [
 		Scenario.display_name(sc.get("id", "")), Scenario.twist_name(sc.get("twist_id", "")), b.round_no, _pname(b.priority), _pname(b.underdog), who, score]
+	_fit_hud.call_deferred()
+
+
+## Keeps the side panels just below the top bar, however many lines it wraps to.
+func _fit_hud() -> void:
+	if _top_panel == null:
+		return
+	var y := _top_panel.get_combined_minimum_size().y + 6.0
+	_left_panel.position.y = y
+	_card_panel.offset_top = y
 
 
 func _update_rosters() -> void:

@@ -615,6 +615,8 @@ static func after_move(b: Battle, f: FighterState) -> void:
 		if b.scen["id"] in ["glimmers_in_the_dark", "the_find"] and b.scen["escaped"][f.player] >= 3:
 			b.end_battle(f.player, "%s has 3 fighters escape with treasure." % b.player_names[f.player])
 			return
+		if b.check_wipeout():
+			return
 		if b.active == f.uid:
 			b.end_activation()
 		return
@@ -747,6 +749,7 @@ static func on_taken_down(b: Battle, f: FighterState, by: FighterState) -> void:
 		"street_of_death":
 			if "hit" in f.marks:
 				b.end_battle(b.scen["ambusher"], "%s, the Hit, has been taken down." % f.name)
+	b.check_wipeout()
 
 
 static func must_take_flee_test(b: Battle, p: int) -> bool:

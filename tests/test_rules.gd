@@ -591,3 +591,46 @@ func test_miscast_odds_one_and_two_dice() -> void:
 			if Magic._casting_roll(b, f, n)["miscast"]:
 				miscasts += 1
 		assert_between(miscasts / 6000.0, 0.15, 0.183, "%d dice miscast rate" % n)
+
+
+## Simulator ruling: a warband with nobody left in the battle loses at once.
+func test_whole_warband_taken_down_loses() -> void:
+	var b := H.bare_battle(3)
+	var a := H.add(b, GM, "guild_mercenary", 0, Vector2(10, 10), ["sword"])
+	H.add(b, GM, "guild_mercenary", 0, Vector2(14, 10), ["sword"])
+	var e := H.add(b, VK, "verminkin_warrior", 1, Vector2(10, 12), ["sword"])
+	Combat.take_down(b, a, e)
+	assert_false(b.is_over(), "one fighter is still standing")
+	Combat.take_down(b, b.fighters[1], e)
+	assert_true(b.is_over(), "the last fighter down ends the battle")
+	assert_eq(b.winner, 1)
+	assert_true(b.result_text.contains("wiped out"), b.result_text)
+
+
+func test_wipeout_waits_for_reserves_and_rise_again() -> void:
+	var b := H.bare_battle(3)
+	var a := H.add(b, GM, "guild_mercenary", 0, Vector2(10, 10), ["sword"])
+	var r := H.add(b, GM, "guild_mercenary", 0, Vector2(0, 0), ["sword"])
+	r.where = "reserve"
+	var e := H.add(b, VK, "verminkin_warrior", 1, Vector2(10, 12), ["sword"])
+	Combat.take_down(b, a, e)
+	assert_false(b.is_over(), "a fighter in reserve keeps the warband in the battle")
+	r.where = "board"
+	r.pos = Vector2(20, 20)
+	r.statuses["rise_again_marker"] = r.pos
+	r.special.append("rise_again")
+	r.where = "down"
+	assert_false(b.check_wipeout(), "a fighter about to Rise Again still counts")
+	r.statuses.erase("rise_again_marker")
+	assert_true(b.check_wipeout())
+	assert_eq(b.winner, 1)
+
+
+func test_both_wiped_out_is_a_draw() -> void:
+	var b := H.bare_battle(3)
+	var a := H.add(b, GM, "guild_mercenary", 0, Vector2(10, 10), ["sword"])
+	var e := H.add(b, VK, "verminkin_warrior", 1, Vector2(10, 12), ["sword"])
+	a.where = "down"
+	e.where = "down"
+	assert_true(b.check_wipeout())
+	assert_eq(b.winner, -1, "a draw")
