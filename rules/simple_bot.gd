@@ -25,7 +25,8 @@ static func answer(b: Battle) -> String:
 			return b.respond({"group": p["groups"][0]})
 		"melee_weapons":
 			var f := b.fighter(p["uid"])
-			return b.respond({"weapons": [f.melee[0]["id"]]})
+			var dw := Combat.default_weapons(f)
+			return b.respond({"weapons": Combat.weapon_ids(f, dw[0], dw[1])})
 		"duel_turn":
 			var opts := Combat.duel_options(b)
 			if opts.is_empty():
@@ -56,7 +57,7 @@ static func play_activation(b: Battle) -> void:
 	var e := nearest_enemy(b, f)
 	if e != null and Effects.is_engaged(b, f) and b.can_still_act(f):
 		var t: FighterState = Effects.engaged_enemies(b, f)[0]
-		Combat.start_melee(b, t.uid, {"weapons": [f.melee[0]["id"]]})
+		Combat.start_melee(b, t.uid, {})
 		var guard := 0
 		while not b.pending.is_empty() and guard < 60:
 			guard += 1

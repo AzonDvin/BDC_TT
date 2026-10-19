@@ -503,3 +503,56 @@ func test_dice_are_fair_and_seeds_unpredictable() -> void:
 	var b3 := Battle.new()
 	b3.setup(Samples.roster("verminkin"), Samples.roster("death_covens"), "a_deadly_encounter", 0, b1.dice.rng.seed)
 	assert_eq(b3.terrain.size(), b1.terrain.size(), "same seed, same battle")
+
+
+func test_summoned_fighter_activates_the_same_round() -> void:
+	var b: Battle
+	var z: FighterState = null
+	for s in 80:
+		b = H.bare_battle(s)
+		var n := H.add(b, "death_covens", "necromancer", 0, Vector2(10, 10), ["arcane_staff"])
+		H.add(b, VK, "verminkin_warrior", 1, Vector2(10, 20), ["sword"])
+		H.add(b, VK, "verminkin_warrior", 1, Vector2(14, 20), ["sword"])
+		n.prepared = [Catalog.lore("death_covens", "necromancy")["spells"][2].duplicate()]
+		H.activate(b, n)
+		Magic.cast(b, "Raise Zombie", {"point": Vector2(10, 12.0)})
+		for f in b.fighters:
+			if f.summoned:
+				z = f
+		if z != null:
+			break
+	assert_true(z != null, "Raise Zombie succeeded on some seed")
+	assert_false(z.activated, "summoned fighters join unactivated")
+	b.end_activation()
+	assert_eq(b.turn, 1)
+	b.activate(b.can_activate_normally(1)[0].uid)
+	b.end_activation()
+	assert_eq(b.turn, 0, "player 0 still has a fighter to activate this round: the Zombie")
+	assert_true(z in b.can_activate_normally(0))
+	assert_eq(b.activate(z.uid), "")
+
+
+func test_offhand_choices_and_defaults() -> void:
+	var b := H.bare_battle()
+	var one := H.add(b, GM, "guild_mercenary", 0, Vector2(5, 5), ["dagger"])
+	assert_eq(Combat.default_weapons(one), [0, -1], "one weapon: nothing to choose, no off-hand")
+	assert_true(Combat.offhand_choices(one, 0).is_empty(), "a weapon can't be its own off-hand")
+	var two := H.add(b, GM, "guild_mercenary", 0, Vector2(8, 5), ["dagger", "axe"])
+	var dw := Combat.default_weapons(two)
+	assert_eq(two.melee[dw[0]]["id"], "axe", "the more damaging off-hand weapon is the main weapon")
+	assert_eq(two.melee[dw[1]]["id"], "dagger", "the less damaging one goes in the off hand")
+	var big := H.add(b, GM, "guild_mercenary", 0, Vector2(11, 5), ["zweihander", "dagger"])
+	assert_true(Combat.offhand_choices(big, 0).is_empty(), "two-handed main weapon: no off-hand")
+	var pair := H.add(b, GM, "guild_mercenary", 0, Vector2(14, 5), ["dagger", "dagger"])
+	assert_eq(Combat.weapon_ids(pair, 0, 1), ["dagger", "dagger"])
+	assert_eq(Combat._check_weapons(pair, ["dagger", "dagger"]), "", "two of the same weapon can be dual-wielded")
+	assert_true(Combat._check_weapons(one, ["dagger", "dagger"]) != "", "but not one dagger twice")
+
+
+func test_melee_without_choice_uses_suggested_weapons() -> void:
+	var b := H.bare_battle(4)
+	var a := H.add(b, GM, "guild_mercenary", 0, Vector2(10, 10), ["dagger", "axe"])
+	var d := H.add(b, VK, "verminkin_warrior", 1, Vector2(10, 11.4), ["sword"])
+	H.activate(b, a)
+	assert_eq(Combat.start_melee(b, d.uid, {}), "")
+	assert_eq(b.duel["att_w"], ["axe", "dagger"])

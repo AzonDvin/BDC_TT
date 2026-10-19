@@ -623,7 +623,7 @@ static func _resolve(b: Battle, f: FighterState, spell: Dictionary, crit: bool, 
 					if spot != Vector2.INF:
 						o.where = "board"
 						o.pos = spot
-						o.activated = true
+						o.activated = false  # arrives unactivated: every fighter on the battlefield activates each round (p.19)
 						placed += 1
 						b.log_line("%s emerges from the tunnel." % o.name)
 		_:
@@ -656,7 +656,9 @@ static func summon(b: Battle, caster: FighterState, def_id: String, at: Vector2,
 	nf.where = "board"
 	nf.pos = at
 	nf.elev = elev
-	nf.activated = true
+	# Joins the warband unactivated: every fighter on the battlefield must activate each round (p.19),
+	# so a fighter summoned this round gets its own activation this round.
+	nf.activated = false
 	b.fighters.append(nf)
 	return nf
 

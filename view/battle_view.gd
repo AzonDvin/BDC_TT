@@ -32,6 +32,7 @@ var tip: PanelContainer
 var tip_text: RichTextLabel
 var pickup_box: CheckBox
 var _last_active := -1
+var defend_store := {}           # the defending player's weapon choices while answering a melee attack
 
 
 func _ready() -> void:
@@ -512,35 +513,46 @@ func _actions_melee_setup(f: FighterState) -> void:
 	_row(trow)
 	var picker := _weapon_picker(f, mode_data)
 	actions.add_child(picker)
-	_row([UI.button("Attack!", func(): _do(Combat.start_melee(b, mode_data.get("target", -1), _melee_opts(mode_data))); _set_mode("idle", false)),
+	_row([UI.button("Attack!", _start_attack),
 		UI.button("Cancel", func(): _set_mode("idle"))])
 
 
-## Main weapon / off-hand / once-per-battle options; writes into `store`.
+## Main weapon / off-hand / once-per-battle options; writes into `store` ("main" and "off" are indices into
+## f.melee, "off" = -1 for none). A single weapon needs no choice; the off-hand list never offers the main
+## weapon; the suggested split puts the less damaging off-hand weapon in the off hand.
 func _weapon_picker(f: FighterState, store: Dictionary) -> Control:
 	var v := UI.vbox(4)
-	var names: Array = []
-	for w in f.melee:
-		names.append(UI.weapon_line(w))
 	if not store.has("main"):
-		store["main"] = 0
-	var main := UI.option(names, store["main"])
-	main.item_selected.connect(func(i): store["main"] = i)
-	v.add_child(UI.label("Weapon:"))
-	v.add_child(main)
-	var offs: Array = ["(no off-hand)"]
-	var off_ids: Array = [""]
-	for w in f.melee:
-		if "Off-hand" in w.get("traits", []):
-			offs.append("Off-hand: " + w["name"])
-			off_ids.append(w["id"])
-	if offs.size() > 1:
-		if not store.has("off"):
-			store["off"] = 1 if f.melee.size() > 1 and off_ids.size() > 1 and off_ids[1] != f.melee[0]["id"] else 0
-		var off := UI.option(offs, store["off"])
-		off.item_selected.connect(func(i): store["off"] = i)
-		store["off_ids"] = off_ids
-		v.add_child(off)
+		var dw := Combat.default_weapons(f)
+		store["main"] = dw[0]
+		store["off"] = dw[1]
+	var main_i: int = store["main"]
+	if f.melee.size() == 1:
+		v.add_child(UI.label("Weapon: " + UI.weapon_line(f.melee[0])))
+		store["off"] = -1
+	else:
+		var names: Array = []
+		for w in f.melee:
+			names.append(UI.weapon_line(w))
+		var main := UI.option(names, main_i)
+		main.item_selected.connect(func(i):
+			store["main"] = i
+			store["off"] = Combat.default_offhand(f, i)
+			_refresh())
+		v.add_child(UI.label("Weapon:"))
+		v.add_child(main)
+		var choices := Combat.offhand_choices(f, main_i)
+		if not choices.is_empty():
+			var labels: Array = ["(no off-hand weapon)"]
+			for i in choices:
+				labels.append("Off-hand: %s (1 attack)" % f.melee[i]["name"])
+			var cur: int = store.get("off", -1)
+			var sel := choices.find(cur) + 1 if cur in choices else 0
+			var off := UI.option(labels, sel)
+			off.item_selected.connect(func(k): store["off"] = -1 if k == 0 else choices[k - 1])
+			v.add_child(off)
+		else:
+			store["off"] = -1
 	if f.has_item("net") and not "net" in f.once_per_battle:
 		var c := CheckBox.new()
 		c.text = "Throw the net (once per battle)"
@@ -561,11 +573,7 @@ func _weapon_picker(f: FighterState, store: Dictionary) -> Control:
 
 func _melee_opts(store: Dictionary) -> Dictionary:
 	var f := b.fighter(store.get("uid", b.active))
-	var ids: Array = [f.melee[int(store.get("main", 0))]["id"]]
-	var off_ids: Array = store.get("off_ids", [""])
-	var oi := int(store.get("off", 0))
-	if oi > 0 and oi < off_ids.size() and off_ids[oi] != ids[0]:
-		ids.append(off_ids[oi])
+	var ids := Combat.weapon_ids(f, int(store.get("main", 0)), int(store.get("off", -1)))
 	return {"weapons": ids, "net": store.get("net", false), "mesmeric": store.get("mesmeric", false), "stand_ground": store.get("stand_ground", false)}
 
 
@@ -609,10 +617,11 @@ func _actions_pending() -> void:
 			var d := b.fighter(p["uid"])
 			var a := b.fighter(b.duel["att"])
 			_header("%s: %s is attacked by %s. Choose %s's weapons." % [b.player_names[who], d.name, a.name, d.name], who)
-			if not mode_data.has("def_store") or mode_data["def_store"].get("uid", -1) != d.uid:
-				mode_data["def_store"] = {"uid": d.uid, "attacker": false}
-			actions.add_child(_weapon_picker(d, mode_data["def_store"]))
-			_row([UI.button("Fight!", func(): var o := _melee_opts(mode_data["def_store"]); mode_data.erase("def_store"); _do(b.respond(o)))])
+			if defend_store.get("uid", -1) != d.uid:
+				defend_store = {"uid": d.uid, "attacker": false}
+			var store := defend_store
+			actions.add_child(_weapon_picker(d, store))
+			_row([UI.button("Fight!", func(): defend_store = {}; _do(b.respond(_melee_opts(store))))])
 		"duel_turn":
 			_actions_duel(p)
 		"pick_quarter":
@@ -722,6 +731,16 @@ func _do(err: String) -> void:
 		_hint = ""
 		_hint_error = false
 	_refresh()
+
+
+## The attacker confirms: leave the set-up mode first, then start the melee so the defender's weapon
+## choice appears straight away (and its settings aren't cleared by the mode change).
+func _start_attack() -> void:
+	var opts := _melee_opts(mode_data)
+	var target: int = mode_data.get("target", -1)
+	_set_mode("idle", false)
+	defend_store = {}
+	_do(Combat.start_melee(b, target, opts))
 
 
 func _set_mode(m: String, refresh := true) -> void:

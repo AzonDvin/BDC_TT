@@ -599,6 +599,9 @@ static func start_melee(b: Battle, target_uid: int, opts: Dictionary) -> String:
 	var t := b.fighter(target_uid)
 	if t == null or not t in Effects.engaged_enemies(b, f):
 		return "The target must be an enemy engaged with %s." % f.name
+	if opts.get("weapons", []).is_empty():
+		var dw := default_weapons(f)
+		opts["weapons"] = weapon_ids(f, dw[0], dw[1])
 	var err := _check_weapons(f, opts.get("weapons", []))
 	if err != "":
 		return err
@@ -614,6 +617,66 @@ static func start_melee(b: Battle, target_uid: int, opts: Dictionary) -> String:
 	return ""
 
 
+## Rough damage value of one attack with a weapon (used to suggest which weapon goes in which hand).
+static func attack_value(w: Dictionary) -> float:
+	var crit = w.get("crit")
+	var v := Dice.average(str(w.get("damage", "1"))) + 0.35 * (Dice.average(str(crit)) if crit != null else 0.0) - 0.3 * int(w.get("rend", 0))
+	if "Unwieldy" in w.get("traits", []):
+		v *= 0.8
+	return v
+
+
+## Indices into f.melee that may be used off-hand alongside the weapon at main_index (p.23): an Off-hand
+## weapon, not the main weapon itself, and never when the fighter has a two-handed weapon.
+static func offhand_choices(f: FighterState, main_index: int) -> Array:
+	var out: Array = []
+	if main_index < 0 or main_index >= f.melee.size() or "Two-handed" in f.melee[main_index].get("traits", []):
+		return out
+	for w in f.ranged:
+		if "Two-handed" in w.get("traits", []):
+			return out
+	for i in f.melee.size():
+		if i != main_index and "Off-hand" in f.melee[i].get("traits", []):
+			out.append(i)
+	return out
+
+
+## Best off-hand partner for a main weapon (the most valuable valid one), or -1.
+static func default_offhand(f: FighterState, main_index: int) -> int:
+	var best := -1
+	for i in offhand_choices(f, main_index):
+		if best < 0 or attack_value(f.melee[i]) > attack_value(f.melee[best]):
+			best = i
+	return best
+
+
+## Suggested [main index, off-hand index or -1]: the split with the most total damage, so with two
+## off-hand weapons the less damaging one goes in the off hand (it only gets 1 attack).
+static func default_weapons(f: FighterState) -> Array:
+	if f.melee.size() <= 1:
+		return [0, -1]
+	var best := [0, -1]
+	var best_total := -INF
+	for m in f.melee.size():
+		var w: Dictionary = f.melee[m]
+		var total := Dice.average(str(w.get("attacks", "1"))) * attack_value(w)
+		var off := default_offhand(f, m)
+		if off >= 0:
+			total += attack_value(f.melee[off])
+		if total > best_total:
+			best_total = total
+			best = [m, off]
+	return best
+
+
+## Weapon ids for a melee attack from indices into f.melee.
+static func weapon_ids(f: FighterState, main_index: int, off_index: int) -> Array:
+	var ids: Array = [f.melee[main_index]["id"]]
+	if off_index >= 0 and off_index != main_index:
+		ids.append(f.melee[off_index]["id"])
+	return ids
+
+
 static func _check_weapons(f: FighterState, ids: Array) -> String:
 	if ids.is_empty():
 		return "Pick a melee weapon."
@@ -622,7 +685,11 @@ static func _check_weapons(f: FighterState, ids: Array) -> String:
 		return "Pick a melee weapon."
 	if ids.size() > 1:
 		var off := f.weapon_by_id(ids[1])
-		if off.is_empty() or ids[1] == ids[0]:
+		var copies := 0
+		for w in f.melee:
+			if w["id"] == ids[0]:
+				copies += 1
+		if off.is_empty() or (ids[1] == ids[0] and copies < 2):
 			return "Pick a different off-hand weapon."
 		if not "Off-hand" in off.get("traits", []):
 			return "%s can't be used off-hand." % off["name"]

@@ -161,3 +161,36 @@ func test_move_clicks_set_destination_not_chain() -> void:
 	assert_eq(view.waypoints.size(), 1, "a second click moves the destination instead of adding a leg")
 	assert_true(Vector2(view.waypoints[0].x, view.waypoints[0].y).is_equal_approx(f.pos + Vector2(2, 0)))
 	view.queue_free()
+
+
+func test_defender_fight_button_works_without_extra_clicks() -> void:
+	App.battle_config = {"rosters": [Samples.roster("guild_mercenaries"), Samples.roster("verminkin")], "scenario": "a_deadly_encounter", "twist": 0, "seed": 5}
+	App.load_battle_path = ""
+	var view = load("res://view/battle.tscn").instantiate()
+	_root().add_child(view)
+	var b: Battle = view.b
+	var g := 0
+	while (b.round_no < 1 or not b.pending.is_empty()) and g < 200:
+		g += 1
+		SimpleBot.answer(b)
+	# Put an attacker of the player whose turn it is next to an enemy and activate it.
+	var att: FighterState = b.on_board(b.turn)[0]
+	var def: FighterState = b.on_board(b.other(b.turn))[0]
+	att.pos = def.pos + Vector2(att.radius + def.radius + 0.4, 0)
+	att.elev = def.elev
+	b.activate(att.uid)
+	view._refresh()
+	view._set_mode("melee_setup")
+	view.mode_data["target"] = def.uid
+	view._start_attack()
+	assert_eq(b.pending.get("type", ""), "melee_weapons", "the defender is asked to pick weapons")
+	# Press the defender's Fight! button exactly as the player would, with no other clicks in between.
+	var fight: Button = null
+	for row in view.actions.get_children():
+		for c in row.get_children():
+			if c is Button and c.text == "Fight!":
+				fight = c
+	assert_true(fight != null, "Fight! button shown")
+	fight.pressed.emit()
+	assert_true(b.pending.get("type", "") == "duel_turn" or b.duel.is_empty(), "the duel goes ahead (pending: %s)" % b.pending.get("type", ""))
+	view.queue_free()
