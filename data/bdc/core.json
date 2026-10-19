@@ -1,0 +1,45 @@
+{
+  "source": "Black Death City Playtest v1.03 (printed page numbers; PDF page = printed + 1)",
+  "battlefield": {"sizes": [[36, 36], [30, 44]], "page": 8},
+  "templates": {"blast_diameter": 3.0, "flame_length": 8.0, "page": 4},
+  "recruitment": {"starting_silver": 1000, "leaders": [1, 1], "champions": [0, 3], "henchmen_min": 5, "brutes": [0, 2], "beasts": [0, 3], "max_fighters": 15, "page": 50,
+    "carrying_limit": {"melee": 2, "ranged": 1, "armour": 1, "items": 2, "page": 13}},
+  "unarmed_strike": {"id": "unarmed_strike", "name": "Unarmed Strike", "attacks": "2", "rend": 0, "damage": "1", "crit": "1", "traits": ["Natural Weapon"], "cost": 0, "page": 24},
+  "weapon_traits": [
+    {"id": "Arcane", "reminder": "Critical hits on 5+", "text": "Attack rolls made with this weapon score critical hits on a natural 5 or 6.", "page": 29},
+    {"id": "Blast", "reminder": "Blast template. Miss scatters d6x2\"", "text": "Uses the blast template: placed on any visible point within range (no closest-target rule), no attack roll for placement; on a miss (not a misfire) it scatters d6x2\" and resolves as a hit. Never scores critical hits.", "page": 29},
+    {"id": "Bludgeon", "reminder": "Critical hits deal 1 damage when saved", "text": "Each time an armour roll saves a critical hit from this weapon, the target suffers 1 damage.", "page": 29},
+    {"id": "Brace", "reminder": "Initiative vs charging fighters", "text": "If used by the defending fighter, it automatically has initiative if the attacker charged this activation.", "page": 29},
+    {"id": "Flame", "reminder": "Flame template. Auto-hits", "text": "Uses the flame template from the activating fighter's base; every visible fighter in it is automatically hit (never a critical), and cannot be in cover.", "page": 29},
+    {"id": "Guard", "reminder": "1 miss can parry a hit", "text": "When parrying, a missed attack roll from this weapon can be discarded instead of a hit. Once each melee attack.", "page": 29},
+    {"id": "Heavy", "reminder": "Move or Attack", "text": "Cannot attack if the fighter has moved this activation; if used to attack, the fighter cannot move this activation.", "page": 29},
+    {"id": "Misfire", "reminder": "On a natural 1", "text": "If any ranged attack rolls are a natural 1, after resolving the other rolls make a misfire roll (d6): 1 Backfire (d3 damage, weapon unusable this battle); 2 Clogged (weapon unusable this battle); 3-6 Flash-in-the-Pan (miss).", "page": 29},
+    {"id": "Natural Weapon", "reminder": "Cannot parry", "text": "Attacks made with this weapon cannot be used to parry.", "page": 29},
+    {"id": "Off-hand", "reminder": "Can be used off-hand: 1 attack", "text": "Can be used as an off-hand weapon in melee (1 attack roll regardless of Attacks value).", "page": 29},
+    {"id": "One-use", "reminder": "1 attack per battle", "text": "Can only be used once each battle.", "page": 29},
+    {"id": "Poison", "reminder": "Critical hits poison", "text": "A fighter suffering damage from a critical hit with this weapon becomes poisoned: suffers 1 damage each time it activates; ends when healed or at 1 life remaining. Demons and Undead cannot be poisoned.", "page": 30},
+    {"id": "Rare", "reminder": "Limited by the number listed", "text": "Rare 0-X: at most X fighters in the warband may carry this item/weapon.", "page": 30},
+    {"id": "Reload", "reminder": "Forgo a Move or Action to reload", "text": "Starts loaded; after each attack it must be reloaded by forgoing a Move or Action. Cannot reload while engaged.", "page": 30},
+    {"id": "Scare", "reminder": "Unengaged fighters pass Willpower test or scatter d6\"", "text": "After the attack, each fighter hit that is not engaged takes a Willpower test; if failed it scatters d6\".", "page": 30},
+    {"id": "Two-handed", "reminder": "1 per fighter. No off-hand attack", "text": "A fighter can only carry 1 two-handed weapon and cannot make off-hand attacks while equipped with one. A held item with a two-handed melee weapon gives -1 Attacks; a held item cannot be carried with a two-handed ranged weapon.", "page": 30},
+    {"id": "Unwieldy", "reminder": "-1 to attack rolls", "text": "Subtract 1 from attack rolls made with this weapon.", "page": 30},
+    {"id": "Volley", "reminder": "Multiple targets within 3\"", "text": "May split its Attacks among the first (legal) target and other visible, unengaged enemies within 3\" of it, assigned before rolling.", "page": 30},
+    {"id": "Wrap", "reminder": "Cannot parry or be parried", "text": "Attacks made by this weapon cannot be parried and cannot be used to parry.", "page": 30}
+  ],
+  "tables": {
+    "misfire_d6": {"1": "Backfire: fighter suffers d3 damage; weapon cannot be used again this battle.", "2": "Clogged: weapon cannot be used again this battle.", "3-6": "Flash-in-the-Pan: the attack misses."},
+    "miscast_2d6": {"2": "Inferno of Sorcery: spell fails; caster is taken down; blast template on caster, all other fighters in it suffer d6 damage.", "3-5": "Arcane Explosion: spell fails; blast template on caster, all fighters in it suffer d3 damage.", "6-7": "Drained Magic: spell fails; caster cannot use arcane actions for the rest of the battle.", "8+": "Uncontrolled Burst of Power: caster suffers d3 damage; if not taken down, the spell is critically cast."},
+    "reinforcements_d6": {"1-2": "No Sight, No Sound: does not arrive; roll again next round.", "3-5": "Arrival: set up within 3\" horizontally of a battlefield edge connected to their entry point and more than 6\" from all enemies.", "6": "Outflank: set up anywhere wholly within 3\" of a battlefield edge, more than 6\" from all enemies."},
+    "scenario_d6": {"1": "a_deadly_encounter", "2": "glimmers_in_the_dark", "3": "no_quarter", "4": "the_chapel", "5": "street_of_death", "6": "the_find"}
+  },
+  "veteran_skills": {"table": "Veteran Skills", "eligible": "Any fighter", "page": 51, "skills": [
+    {"id": "dual_weapon_wielder", "name": "Dual-weapon Wielder", "text": "Off-hand weapon attacks make 2 attack rolls instead of 1."},
+    {"id": "shooting_drills", "name": "Shooting Drills", "text": "When reloading, take a Willpower test; if passed, no Move or Action needs to be forgone."},
+    {"id": "great_weapon_master", "name": "Great Weapon Master", "text": "Ignores the Unwieldy trait on melee weapons."},
+    {"id": "unshakeable", "name": "Unshakeable", "text": "Ignores the Fear special rule and all rules that would make it scatter."},
+    {"id": "tough_bastard", "name": "Tough Bastard", "text": "Each activation while bloodied, take a Willpower test; if passed, heal 1 and no longer bloodied."},
+    {"id": "fast_learner", "name": "Fast Learner", "text": "Campaign: earns d6 bonus XP each aftermath."},
+    {"id": "duellist", "name": "Duellist", "text": "Can parry critical hits with any successful attack."},
+    {"id": "steady_aim", "name": "Steady Aim", "text": "+1 to ranged attack rolls while it has not moved this activation."}
+  ]}
+}
