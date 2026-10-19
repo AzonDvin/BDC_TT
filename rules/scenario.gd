@@ -22,10 +22,13 @@ const TWISTS := {
 	"the_find": ["on_fire", "defiant_stand", "barricaded_holdout", "delayed_arrival", "surrounded_on_all_sides", "old_debt_collectors_house"],
 }
 
-## Twists the simulator applies automatically; the rest are shown to the players to resolve on the table.
-const AUTOMATED_TWISTS: PackedStringArray = ["a_brewing_storm", "outflank", "delayed_arrival", "thieves_in_the_dark", "beggars_desperation",
-	"upturned_wagon", "false_riches", "show_of_strength", "turf_war", "a_hidden_trove", "heavy_downpour", "vow_of_blood", "tip_off",
-	"defiant_stand", "old_debt_collectors_house", "battle_for_the_tower", "cursed_coin", "saints_statue", "surrounded_on_all_sides"]
+## Twists the simulator applies automatically (currently all of them).
+const AUTOMATED_TWISTS: PackedStringArray = ["a_brewing_storm", "battle_for_the_tower", "outflank", "delayed_arrival", "condemned", "the_chest",
+	"cursed_coin", "false_riches", "thieves_in_the_dark", "beggars_desperation", "saint_tricksters_game", "upturned_wagon",
+	"rolling_fog", "show_of_strength", "the_forsaken_quarter", "turf_war", "the_critical_quarter", "saints_statue",
+	"a_hidden_trove", "desecrated_ground", "the_saints_sarcophagus",
+	"drunk_as_an_eel", "heavy_downpour", "vow_of_blood", "hidden_tunnel", "shadows_lurk_above", "tip_off",
+	"on_fire", "defiant_stand", "barricaded_holdout", "surrounded_on_all_sides", "old_debt_collectors_house"]
 
 
 static func display_name(id: String) -> String:
@@ -47,7 +50,7 @@ static func corners(b: Battle) -> Array:
 # =============================================================================================
 # Setup
 
-static func setup(b: Battle, id: String, twist_index: int) -> void:
+static func setup(b: Battle, id: String, twist_index: int, layout: Dictionary = {}) -> void:
 	if not NAMES.has(id):
 		id = ORDER[b.dice.d6() - 1]
 	var twists: Array = TWISTS[id]
@@ -56,6 +59,9 @@ static func setup(b: Battle, id: String, twist_index: int) -> void:
 	var twist_id: String = twists[clampi(twist_index, 0, twists.size() - 1)]
 	b.scen = {"id": id, "twist_id": twist_id, "vp": [0, 0], "marks": [0, 0], "escaped": [0, 0], "groups": 2,
 		"deploy_radius": 12.0, "reinforce_round": [3, 3], "entry": [-1, -1]}
+	if not layout.is_empty():
+		b.scen["layout_terrain"] = layout.get("pieces", [])
+		b.scen["layout_name"] = layout.get("name", "custom")
 	b.log_line("Scenario: %s. Twist: %s%s." % [NAMES[id], twist_name(twist_id), "" if twist_id in AUTOMATED_TWISTS else " (resolve its effects on the table)"])
 	match id:
 		"a_deadly_encounter":
@@ -86,8 +92,16 @@ static func setup(b: Battle, id: String, twist_index: int) -> void:
 		"heavy_downpour":
 			b.scen["visibility_limit"] = 9.0
 			b.scen["rain"] = true
-	generate_terrain(b)
+	if b.scen.get("layout_terrain", []).is_empty():
+		generate_terrain(b)
+	else:
+		b.terrain = []
+		for d in b.scen["layout_terrain"]:
+			b.terrain.append(TerrainPiece.from_dict(d))
+		b.log_line("Battlefield: %s (custom layout)." % b.scen.get("layout_name", "custom"))
+		b.scen.erase("layout_terrain")
 	_place_treasure(b)
+	Twists.setup_extra(b)
 	_assign_battle_groups(b)
 	if id == "street_of_death":
 		_setup_street(b)
@@ -136,6 +150,8 @@ static func _setup_street(b: Battle) -> void:
 	if hit == null:
 		hit = all_def[0]
 	hit.marks.append("hit")
+	if b.scen["twist_id"] == "drunk_as_an_eel" and not (hit.has_kw("Demon") or hit.has_kw("Undead")):
+		hit.statuses["drunk"] = true
 	if b.scen["twist_id"] == "vow_of_blood":
 		hit.stats["life"] = int(hit.stats["life"]) + 3
 		hit.life = int(hit.stats["life"])
@@ -174,10 +190,13 @@ static func respond(b: Battle, choice: Dictionary) -> String:
 			b.scen["entry"][b.other(w)] = (c + 2) % 4
 			b.pending = {}
 			b.log_line("%s takes the %s entry point; %s the opposite corner." % [b.player_names[w], ["north-west", "north-east", "south-east", "south-west"][c], b.player_names[b.other(w)]])
+			Twists.after_entries(b)
 			if b.scen["id"] == "the_find":
 				_deploy_next(b, [w, b.other(w)])
 			else:
 				_deploy_next(b, [w, b.other(w)])
+		"pick_quarter", "pick_fighter":
+			return Twists.respond(b, choice)
 		"pick_reserve_group":
 			var g := int(choice.get("group", -1))
 			if not g in p["groups"]:
@@ -236,7 +255,7 @@ static func deploy_zone(b: Battle, p: int) -> Dictionary:
 				var west: bool = b.scen["escape_edge"] == "west"
 				var r := Rect2(Vector2(18.0 if west else 0.0, 15.5), Vector2(b.board_size.x - 18.0, 5.0))
 				return {"type": "rect", "rect": r}
-			return {"type": "any", "min_enemy": 12.0}
+			return {"type": "any", "min_enemy": 12.0, "shadows": b.scen.get("twist_id", "") == "shadows_lurk_above"}
 		"the_find":
 			if p == b.scen["defender"]:
 				return {"type": "rect", "rect": Rect2(center(b) - Vector2(7, 7), Vector2(14, 14))}
@@ -245,8 +264,8 @@ static func deploy_zone(b: Battle, p: int) -> Dictionary:
 	return {"type": "corner", "corner": b.scen["entry"][p], "radius": b.scen["deploy_radius"]}
 
 
-## "" if fighter f may be set up at pos within zone.
-static func zone_ok(b: Battle, f: FighterState, pos: Vector2, zone: Dictionary) -> String:
+## "" if fighter f may be set up at pos (on level elev) within zone.
+static func zone_ok(b: Battle, f: FighterState, pos: Vector2, zone: Dictionary, elev := 0.0) -> String:
 	match zone.get("type", "any"):
 		"corner":
 			if not Geo.wholly_within_point(pos, f.radius, corners(b)[zone["corner"]], zone["radius"]):
@@ -267,10 +286,14 @@ static func zone_ok(b: Battle, f: FighterState, pos: Vector2, zone: Dictionary) 
 			if not ok:
 				return "Must be wholly within %.0f\" of a permitted battlefield edge." % depth
 	var min_enemy: float = zone.get("min_enemy", 0.0)
+	if zone.get("shadows", false) and elev >= 3.0 - Geo.EPS:
+		min_enemy = 9.0  # Shadows Lurk Above: high up, the Ambusher may set up closer
 	for o in b.on_board(b.other(f.player)):
-		if min_enemy > 0.0 and Geo.base_gap(pos, f.radius, o.pos, o.radius) <= min_enemy:
+		if min_enemy > 0.0 and Height.gap3(pos, f.radius, elev, o.pos, o.radius, o.elev) <= min_enemy:
 			return "Must be more than %.0f\" from all enemy fighters." % min_enemy
-	return Magic._placement_ok(b, f, pos)
+	if zone.get("min_elev", 0.0) > 0.0 and elev < float(zone["min_elev"]) - Geo.EPS:
+		return "Must be set up %.0f\" or more above the battlefield floor." % zone["min_elev"]
+	return Magic._placement_ok(b, f, pos, elev)
 
 
 ## edge index: 0 north (y=0), 1 east (x=W), 2 south (y=H), 3 west (x=0)
@@ -290,25 +313,31 @@ static func corner_edges(c: int) -> Array:
 	return [[0, 3], [0, 1], [1, 2], [2, 3]][c]
 
 
-## choice: {"positions": {uid: Vector2}} (any missing are auto-placed) or {"auto": true}.
+## choice: {"positions": {uid: Vector2}, "elevs": {uid: float}} (any missing are auto-placed) or {"auto": true}.
 static func respond_placement(b: Battle, choice: Dictionary) -> String:
 	var p := b.pending
 	var uids: Array = p["uids"]
 	var positions: Dictionary = choice.get("positions", {})
+	var elevs: Dictionary = choice.get("elevs", {})
 	var zone: Dictionary = p["zone"]
 	for uid in uids:
 		var f := b.fighter(uid)
 		if positions.has(uid):
-			var err := zone_ok(b, f, positions[uid], zone)
+			var el: float = elevs.get(uid, 0.0)
+			f.where = "reserve"
+			var err := zone_ok(b, f, positions[uid], zone, el)
 			if err != "":
 				return "%s: %s" % [f.name, err]
 			f.pos = positions[uid]
+			f.elev = el
 			f.where = "board"
 		else:
+			f.where = "reserve"
 			var spot := auto_spot(b, f, zone)
 			if spot == Vector2.INF:
 				return "No room to place %s; place fighters by hand." % f.name
 			f.pos = spot
+			f.elev = 0.0
 			f.where = "board"
 	b.pending = {}
 	if p["type"] == "deploy":
@@ -355,6 +384,7 @@ static func find_spot(b: Battle, f: FighterState, near: Vector2, radius: float) 
 # --- Start of round: twists and reinforcements (p.36) -------------------------------------------
 
 static func start_of_round(b: Battle) -> void:
+	Twists.start_of_round_auto(b)
 	var tw: String = b.scen.get("twist_id", "")
 	if tw == "a_brewing_storm" and b.round_no > 1 and not b.scen.get("rain", false):
 		var r := b.dice.d6()
@@ -383,6 +413,17 @@ static func start_of_round(b: Battle) -> void:
 					f.pos = spot
 					f.life = b.dice.d3()
 					b.log_line("%s rises again with %d life!" % [f.name, f.life])
+	b.scen["sor_choices"] = Twists.start_of_round_choices(b)
+	continue_start_of_round(b)
+
+
+## Asks any start-of-round twist choices one at a time, then rolls reinforcements.
+static func continue_start_of_round(b: Battle) -> void:
+	var choices: Array = b.scen.get("sor_choices", [])
+	if not choices.is_empty():
+		b.pending = choices.pop_front()
+		b.changed.emit()
+		return
 	b.scen["sor_queue"] = [b.priority, b.other(b.priority)]
 	_reinforce_step(b)
 
@@ -478,8 +519,10 @@ static func _continue_arrivals(b: Battle) -> bool:
 
 # --- Activation hooks ---------------------------------------------------------------------------
 
-static func start_of_activation(b: Battle, f: FighterState) -> void:
+## Returns false if the activation ends immediately.
+static func start_of_activation(b: Battle, f: FighterState) -> bool:
 	Magic.start_of_activation(b, f)
+	return Twists.start_of_activation(b, f)
 
 
 static func end_of_activation(b: Battle, f: FighterState) -> void:
@@ -544,9 +587,11 @@ static func can_pick_up(b: Battle, f: FighterState) -> bool:
 
 
 static func pick_up(b: Battle, f: FighterState, index: int) -> void:
+	var token: Dictionary = b.tokens[index]
 	b.tokens.remove_at(index)
 	f.treasure = 1
 	b.log_line("%s picks up treasure." % f.name)
+	Twists.after_pick_up(b, token)
 
 
 static func drop_treasure(b: Battle, f: FighterState) -> void:
@@ -556,7 +601,8 @@ static func drop_treasure(b: Battle, f: FighterState) -> void:
 	var spot := f.pos + Vector2.from_angle(b.dice.rng.randf() * TAU) * (f.radius + 0.5)
 	spot.x = clampf(spot.x, 0.5, b.board_size.x - 0.5)
 	spot.y = clampf(spot.y, 0.5, b.board_size.y - 0.5)
-	b.tokens.append({"type": "treasure", "pos": spot})
+	var lvl := f.elev if Height.supports(b, spot, f.elev) else Height.level_below(b, spot, f.elev + 0.01)
+	b.tokens.append({"type": "treasure", "pos": spot, "elev": lvl})
 	b.log_line("Treasure is dropped next to %s." % f.name)
 
 
@@ -595,7 +641,7 @@ static func _place_treasure(b: Battle) -> void:
 			for i in n2:
 				pts.append(c + Vector2.from_angle(TAU * i / n2) * (1.2 if i % 2 == 0 else 2.4))
 	for p in pts:
-		b.tokens.append({"type": "treasure", "pos": p})
+		b.tokens.append({"type": "treasure", "pos": p, "elev": 0.0})
 	if not pts.is_empty():
 		b.log_line("%d treasure token(s) placed." % pts.size())
 
@@ -624,6 +670,7 @@ static func on_taken_down(b: Battle, f: FighterState, by: FighterState) -> void:
 		"a_deadly_encounter":
 			b.scen["vp"][opp] += 1
 			b.log_line("%s scores 1 victory point (Death Marks): %d VP." % [b.player_names[opp], b.scen["vp"][opp]])
+			Twists.on_taken_down(b, f)
 		"the_chapel":
 			b.scen["marks"][opp] += 1
 			b.log_line("%s scores a death mark: %d." % [b.player_names[opp], b.scen["marks"][opp]])
@@ -639,12 +686,17 @@ static func on_taken_down(b: Battle, f: FighterState, by: FighterState) -> void:
 					b.scen["grass_sprouts"] = true
 				elif r == 5:
 					b.scen["blood_frenzy"] = true
+				elif r == 6:
+					b.scen["thunder"] = true
+					b.scen["desecrated_triggered"] = false  # the table re-arms
 		"street_of_death":
 			if "hit" in f.marks:
 				b.end_battle(b.scen["ambusher"], "%s, the Hit, has been taken down." % f.name)
 
 
 static func must_take_flee_test(b: Battle, p: int) -> bool:
+	if Twists.flee_autopass(b, p):
+		return false
 	if b.scen.get("id", "") == "street_of_death" and p == b.scen.get("defender", -1):
 		return false
 	if b.scen.get("twist_id", "") == "defiant_stand" and p == b.scen.get("defender", -1):
@@ -658,6 +710,12 @@ static func must_take_flee_test(b: Battle, p: int) -> bool:
 
 
 static func end_of_round(b: Battle) -> void:
+	Twists.end_of_round(b)
+	_victory_checks(b)
+	Twists.clear_round(b)
+
+
+static func _victory_checks(b: Battle) -> void:
 	match b.scen.get("id", ""):
 		"a_deadly_encounter":
 			var holders := _holders_near_centre(b, 6.0)
@@ -719,11 +777,15 @@ static func _score_quarters(b: Battle) -> void:
 		for f in b.on_board():
 			if quarter_of(b, f) == q:
 				n[f.player] += 1
+		if b.scen.get("forsaken_quarter", -1) == q:
+			continue
 		for p in 2:
 			if n[p] > n[1 - p]:
 				var pts := 1
 				if b.scen["twist_id"] == "turf_war" and q == b.scen["entry"][1 - p]:
 					pts = 3
+				if b.scen.get("critical_quarter", -1) == q:
+					pts += 1
 				b.scen["marks"][p] += pts
 				b.log_line("%s controls quarter %d: +%d domination (%d)." % [b.player_names[p], q + 1, pts, b.scen["marks"][p]])
 
@@ -747,6 +809,7 @@ static func generate_terrain(b: Battle) -> void:
 			keep_clear.append(Rect2(c - Vector2(3, 3), Vector2(6, 6)))
 			if b.scen["twist_id"] == "battle_for_the_tower":
 				b.terrain.append(TerrainPiece.make("Tower", "high", Geo.rect_polygon(c, Vector2(3, 3)), 8.0))
+				b.terrain.append(TerrainPiece.make("Ladder", "ladder", Geo.rect_polygon(c + Vector2(1.7, 0), Vector2(0.4, 1.0)), 8.0))
 		"no_quarter":
 			keep_clear.append(Rect2(Vector2(c.x - 2.5, 0), Vector2(5, b.board_size.y)))
 			keep_clear.append(Rect2(Vector2(0, c.y - 2.5), Vector2(b.board_size.x, 5)))
@@ -776,13 +839,13 @@ static func generate_terrain(b: Battle) -> void:
 		if kind_roll <= 3:
 			pieces = _ruin(b, pos, ang)
 		elif kind_roll == 4:
-			pieces = [TerrainPiece.make("Ruined house", "high", Geo.rect_polygon(pos, Vector2(b.dice.rng.randf_range(3.5, 5.0), b.dice.rng.randf_range(3.5, 5.0)), ang), b.dice.rng.randf_range(4.0, 6.0))]
+			pieces = _house(b, pos, ang)
 		elif kind_roll == 5:
 			pieces = [TerrainPiece.make("Low wall", "low", Geo.rect_polygon(pos, Vector2(b.dice.rng.randf_range(3.0, 5.0), 0.4), ang), 1.0)]
 		else:
 			pieces = [TerrainPiece.make("Rubble", "low", _blob(b, pos, b.dice.rng.randf_range(1.2, 2.0)), 0.6)]
 		if _fits(b, pieces, keep_clear):
-			b.terrain.append_array(pieces)
+			_add_group(b, pieces)
 			placed += 1
 	# A few extra low walls give cover in open ground.
 	attempts = 0
@@ -792,19 +855,63 @@ static func generate_terrain(b: Battle) -> void:
 		var pos2 := Vector2(b.dice.rng.randf_range(4, b.board_size.x - 4), b.dice.rng.randf_range(4, b.board_size.y - 4))
 		var piece := TerrainPiece.make("Low wall", "low", Geo.rect_polygon(pos2, Vector2(3.0, 0.4), float(b.dice.rng.randi_range(0, 3)) * PI / 2.0), 1.0)
 		if _fits(b, [piece], keep_clear if id != "street_of_death" else keep_clear.slice(0, 4)):
-			b.terrain.append(piece)
+			_add_group(b, [piece])
 			extras += 1
 
 
+## An L-shaped ruin: two walls (one with a doorway, one with a window), rubble, and often an upper floor
+## resting on the walls with a ladder up to it.
+static func _add_group(b: Battle, pieces: Array) -> void:
+	var g := 1
+	for t in b.terrain:
+		g = maxi(g, t.group + 1)
+	for p in pieces:
+		p.group = g
+		b.terrain.append(p)
+
+
 static func _ruin(b: Battle, pos: Vector2, ang: float) -> Array:
-	var a := b.dice.rng.randf_range(3.5, 6.0)
-	var l := b.dice.rng.randf_range(3.0, 5.0)
-	var h := b.dice.rng.randf_range(2.5, 5.0)
-	var t := 0.5
-	var w1 := Geo.rect_polygon(pos + Vector2(a / 2.0, 0).rotated(ang), Vector2(a, t), ang)
-	var w2 := Geo.rect_polygon(pos + Vector2(0, l / 2.0).rotated(ang), Vector2(t, l), ang)
-	var rub := _blob(b, pos + Vector2(a * 0.5, l * 0.45).rotated(ang), 0.9)
-	return [TerrainPiece.make("Ruined wall", "high", w1, h), TerrainPiece.make("Ruined wall", "high", w2, h * 0.8), TerrainPiece.make("Rubble", "low", rub, 0.5)]
+	var a := b.dice.rng.randf_range(4.0, 6.5)
+	var l := b.dice.rng.randf_range(3.5, 5.5)
+	var h := b.dice.rng.randf_range(4.0, 5.5)
+	var th := 0.25  # wall thickness: 1/4"
+	var out: Array = []
+	var rot := func(v: Vector2) -> Vector2: return pos + v.rotated(ang)
+	# Wall along +x with a 1.4" doorway
+	var door_at := b.dice.rng.randf_range(1.2, a - 1.6)
+	out.append(TerrainPiece.make("Ruined wall", "high", Geo.rect_polygon(rot.call(Vector2(door_at / 2.0, 0)), Vector2(door_at, th), ang), h))
+	out.append(TerrainPiece.make("Ruined wall", "high", Geo.rect_polygon(rot.call(Vector2((door_at + 1.4 + a) / 2.0, 0)), Vector2(a - door_at - 1.4, th), ang), h))
+	var door := TerrainPiece.make("Doorway", "door", Geo.rect_polygon(rot.call(Vector2(door_at + 0.7, 0)), Vector2(1.4, th), ang), h)
+	door.lintel = 2.8
+	out.append(door)
+	# Wall along +y with a 1.2" window
+	var win_at := b.dice.rng.randf_range(1.0, l - 1.4)
+	out.append(TerrainPiece.make("Ruined wall", "high", Geo.rect_polygon(rot.call(Vector2(0, win_at / 2.0)), Vector2(th, win_at), ang), h * 0.9))
+	out.append(TerrainPiece.make("Ruined wall", "high", Geo.rect_polygon(rot.call(Vector2(0, (win_at + 1.2 + l) / 2.0)), Vector2(th, l - win_at - 1.2), ang), h * 0.9))
+	var win := TerrainPiece.make("Window", "window", Geo.rect_polygon(rot.call(Vector2(0, win_at + 0.6)), Vector2(th, 1.2), ang), h * 0.9)
+	win.sill = 1.0
+	win.lintel = 2.6
+	out.append(win)
+	if b.dice.d6() >= 3:
+		var floor_h := 3.0
+		var plat := TerrainPiece.make("Upper floor", "platform", Geo.rect_polygon(rot.call(Vector2(a / 2.0, l / 2.0)), Vector2(a - 0.3, l - 0.3), ang), floor_h)
+		out.append(plat)
+		var ladder := TerrainPiece.make("Ladder", "ladder", Geo.rect_polygon(rot.call(Vector2(a + 0.2, l * 0.5)), Vector2(0.4, 1.0), ang), floor_h)
+		out.append(ladder)
+	else:
+		out.append(TerrainPiece.make("Rubble", "low", _blob(b, rot.call(Vector2(a * 0.5, l * 0.45)), 0.9), 0.5))
+	return out
+
+
+## A ruined house with a flat, walkable roof, sometimes with a ladder up.
+static func _house(b: Battle, pos: Vector2, ang: float) -> Array:
+	var w := b.dice.rng.randf_range(3.5, 5.0)
+	var d := b.dice.rng.randf_range(3.5, 5.0)
+	var h := b.dice.rng.randf_range(4.0, 6.0)
+	var out: Array = [TerrainPiece.make("Ruined house", "high", Geo.rect_polygon(pos, Vector2(w, d), ang), h)]
+	if b.dice.d6() >= 4:
+		out.append(TerrainPiece.make("Ladder", "ladder", Geo.rect_polygon(pos + Vector2(w / 2.0 + 0.2, 0).rotated(ang), Vector2(0.4, 1.0), ang), h))
+	return out
 
 
 static func _corner_ruins(b: Battle, r: Rect2, nm: String, arm := 3.5) -> void:
@@ -813,8 +920,8 @@ static func _corner_ruins(b: Battle, r: Rect2, nm: String, arm := 3.5) -> void:
 	for i in 4:
 		var c: Vector2 = cs[i]
 		var d: Vector2 = dirs[i]
-		b.terrain.append(TerrainPiece.make(nm, "high", Geo.rect_polygon(c + Vector2(d.x * arm / 2.0, 0), Vector2(arm, 0.5)), 4.0))
-		b.terrain.append(TerrainPiece.make(nm, "high", Geo.rect_polygon(c + Vector2(0, d.y * arm / 2.0), Vector2(0.5, arm)), 4.0))
+		b.terrain.append(TerrainPiece.make(nm, "high", Geo.rect_polygon(c + Vector2(d.x * arm / 2.0, 0), Vector2(arm, 0.25)), 4.0))
+		b.terrain.append(TerrainPiece.make(nm, "high", Geo.rect_polygon(c + Vector2(0, d.y * arm / 2.0), Vector2(0.25, arm)), 4.0))
 
 
 static func _blob(b: Battle, c: Vector2, r: float) -> PackedVector2Array:
@@ -833,7 +940,7 @@ static func _fits(b: Battle, pieces: Array, keep_clear: Array) -> bool:
 			if (k as Rect2).intersects(bounds):
 				return false
 		for t in b.terrain:
-			if _bounds(t.polygon).grow(2.2).intersects(bounds):
+			if _bounds(t.polygon).grow(2.4).intersects(bounds):
 				return false
 	return true
 

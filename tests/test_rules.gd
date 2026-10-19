@@ -440,3 +440,45 @@ func test_placement_rejects_overlapping_bases() -> void:
 	probe.player = 0
 	assert_true(Magic._placement_ok(b, probe, Vector2(10.5, 10)).contains("Overlaps"))
 	assert_eq(Magic._placement_ok(b, probe, Vector2(11.3, 10)), "")
+
+
+func test_placement_keeps_bases_out_of_walls() -> void:
+	var b := H.bare_battle()
+	b.terrain = [TerrainPiece.make("Thin wall", "high", Geo.rect_polygon(Vector2(10, 10), Vector2(6, 0.25)), 4.0)]
+	var probe := FighterState.new()
+	probe.radius = Geo.radius_from_mm(32.0)
+	probe.player = 0
+	assert_true(Magic._placement_ok(b, probe, Vector2(10, 10.5)).contains("overlap"), "centre beside the wall, base overlapping it")
+	assert_eq(Magic._placement_ok(b, probe, Vector2(10, 10.9)), "")
+
+
+func test_auto_deployment_never_overlaps_terrain() -> void:
+	for sc in Scenario.ORDER:
+		for s in 3:
+			var b := Battle.new()
+			b.setup(Samples.roster("verminkin"), Samples.roster("blighted_cloister"), sc, -1, 500 + s)
+			var g := 0
+			while b.round_no < 4 and g < 400 and not b.is_over():
+				g += 1
+				if not SimpleBot.step(b):
+					break
+			for f in b.on_board():
+				for t in b.terrain:
+					if t.blocks_movement() and f.elev <= Height.LEVEL_EPS:
+						assert_false(Geo.base_overlaps_polygon(f.pos, f.radius - 0.02, t.polygon), "%s %s overlaps %s at %s" % [sc, f.name, t.name, f.pos])
+
+
+func test_hide_next_to_a_wall() -> void:
+	var b := H.bare_battle()
+	b.terrain = [TerrainPiece.make("Wall", "high", Geo.rect_polygon(Vector2(10, 10), Vector2(6, 0.25)), 4.0)]
+	var f := H.add(b, GM, "guild_mercenary", 0, Vector2(10, 10.125 + 0.63 + 0.2))  # 0.2" gap, as when placed by clicking
+	H.add(b, VK, "verminkin_warrior", 1, Vector2(30, 30))
+	H.activate(b, f)
+	assert_eq(Combat.hide_problem(b, f), "")
+	assert_eq(Combat.hide(b), "")
+	assert_true(f.statuses.get("hidden", false))
+	var b2 := H.bare_battle()
+	var g := H.add(b2, GM, "guild_mercenary", 0, Vector2(10, 10))
+	H.add(b2, VK, "verminkin_warrior", 1, Vector2(30, 30))
+	H.activate(b2, g)
+	assert_true(Combat.hide_problem(b2, g).contains("terrain"), "open ground: the reason is shown")

@@ -1,8 +1,8 @@
 class_name BattleView
 extends Node
 ## The battle screen: 3D table + HUD. Hot-seat: whoever's decision it is uses the mouse.
-## Controls: left-click select/act · right-drag orbit · middle-drag or WASD pan · wheel zoom ·
-## Enter confirm move · Backspace remove waypoint · Esc cancel.
+## Controls: left-click select/act (Alt+click aims at the floor under roofs and upper floors) · right-drag orbit ·
+## middle-drag or WASD pan · wheel zoom · Enter confirm move · Backspace remove waypoint · Esc cancel.
 
 const SAVE_PATH := "user://battle_save.bdc"
 
@@ -11,9 +11,11 @@ var board: Board3D
 var selected := -1
 var mode := "idle"          # idle, move, shoot, blast, flame, spell, ability, melee_setup
 var mode_data := {}
-var waypoints := PackedVector2Array()
-var placements := {}
+var waypoints: Array = []        # Vector3(x, y, level)
+var placements := {}             # uid -> Vector3(x, y, level)
 var hover := Vector2.INF
+var hover_level := 0.0
+var descend := "auto"
 var table_mode := false
 var _rotating := false
 var _panning := false
@@ -26,6 +28,8 @@ var card: RichTextLabel
 var actions: VBoxContainer
 var rosters: Array = [null, null]
 var hint_label: Label
+var tip: PanelContainer
+var tip_text: RichTextLabel
 var pickup_box: CheckBox
 var _last_active := -1
 
@@ -42,7 +46,7 @@ func _ready() -> void:
 		var cfg: Dictionary = App.battle_config
 		if cfg.is_empty():
 			cfg = {"rosters": [Samples.roster("guild_mercenaries"), Samples.roster("verminkin")], "scenario": "", "twist": -1, "seed": -1}
-		b.setup(cfg["rosters"][0], cfg["rosters"][1], cfg["scenario"], cfg["twist"], cfg["seed"])
+		b.setup(cfg["rosters"][0], cfg["rosters"][1], cfg["scenario"], cfg["twist"], cfg["seed"], cfg.get("layout", {}))
 	b.changed.connect(_refresh)
 	b.logged.connect(_on_log)
 	board.build(b)
@@ -149,6 +153,26 @@ func _build_hud() -> void:
 	actp.add_child(av)
 	root.add_child(actp)
 
+	tip = PanelContainer.new()
+	tip.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	tip.visible = false
+	var tip_style := StyleBoxFlat.new()
+	tip_style.bg_color = Color(0.07, 0.065, 0.06)
+	tip_style.border_color = App.GOLD
+	tip_style.set_border_width_all(1)
+	tip_style.set_corner_radius_all(4)
+	tip_style.set_content_margin_all(8)
+	tip.add_theme_stylebox_override("panel", tip_style)
+	tip_text = RichTextLabel.new()
+	tip_text.bbcode_enabled = true
+	tip_text.fit_content = true
+	tip_text.scroll_active = false
+	tip_text.custom_minimum_size = Vector2(340, 0)
+	tip_text.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	tip_text.add_theme_font_size_override("normal_font_size", 13)
+	tip.add_child(tip_text)
+	root.add_child(tip)
+
 
 # =============================================================================================
 # Refresh
@@ -161,6 +185,9 @@ func _refresh() -> void:
 			_set_mode("idle", false)
 	if not b.move_plan.is_empty() and mode != "move":
 		mode = "move"
+	elif b.move_plan.is_empty() and mode == "move":
+		mode = "idle"
+		waypoints.clear()
 	if b.active >= 0 and b.active != _last_active:
 		selected = b.active
 	_last_active = b.active
@@ -234,13 +261,21 @@ func _update_rosters() -> void:
 func _update_card() -> void:
 	var f := b.fighter(selected)
 	if f == null:
-		card.text = "[color=#a89e88]Click a fighter to see their profile.\n\nRight-drag to orbit, wheel to zoom, middle-drag or WASD to pan.[/color]"
+		card.text = "[color=#a89e88]Click a fighter to see their profile, or hover over one for a quick look.\n\nRight-drag to orbit, wheel to zoom, middle-drag or WASD to pan.[/color]"
 		return
+	card.text = _fighter_text(f, true)
+
+
+## The fighter's profile as BBCode. full = with special rule texts and spells (the side card);
+## otherwise a compact version for the hover tooltip.
+func _fighter_text(f: FighterState, full: bool) -> String:
 	var s: Dictionary = f.stats
 	var t := "[b][color=#%s]%s[/color][/b]  [color=#a89e88]%s[/color]\n" % [App.player_color(f.player).to_html(false), f.name, Catalog.fighter_def(f.faction, f.def_id).get("name", "")]
 	t += "[color=#a89e88]%s[/color]\n" % ", ".join(f.keywords)
 	var arm := Effects.armour_value(b, f) if f.on_board() else int(s["armour"])
-	t += "[code]Mv %s  Bl %s  Bw %s  Ar %s  In %s  Wp %s  Life %d/%d[/code]\n" % [s["move"], _tn(s["blade"]), _tn(s["bow"]), "-" if arm >= 7 else "%d+" % arm, s["initiative"], s["willpower"], f.life, f.max_life()]
+	t += "[code]Mv %s  Bl %s  Bw %s  Ar %s  In %s  Wp %s  Life %d/%d[/code]\n" % [_num(s["move"]), _tn(s["blade"]), _tn(s["bow"]), "-" if arm >= 7 else "%d+" % arm, _num(s["initiative"]), _num(s["willpower"]), f.life, f.max_life()]
+	if f.elev > Height.LEVEL_EPS:
+		t += "[color=#a0c0ff]Standing %.1f\" above the floor[/color]\n" % f.elev
 	for w in f.melee:
 		t += "⚔ " + UI.weapon_line(w) + "\n"
 	for w in f.ranged:
@@ -257,18 +292,29 @@ func _update_card() -> void:
 		items.append(Catalog.wargear(f.faction, id).get("name", id))
 	if not items.is_empty():
 		t += "Items: %s\n" % ", ".join(items)
-	for sid in f.skills:
-		var sk := Catalog.skill(f.faction, sid)
-		t += "[color=#d9b45a]%s[/color]: %s\n" % [sk.get("name", sid), sk.get("text", "")]
-	for sr in Catalog.fighter_def(f.faction, f.def_id).get("special_rules", []):
-		t += "[color=#d9b45a]%s[/color]: %s\n" % [sr["name"], sr["text"]]
-	if not f.prepared.is_empty():
+	if not full:
+		var rules: PackedStringArray = []
+		for sid in f.skills:
+			rules.append(Catalog.skill(f.faction, sid).get("name", sid))
+		for sr in Catalog.fighter_def(f.faction, f.def_id).get("special_rules", []):
+			rules.append(sr["name"])
+		for sp in f.prepared:
+			rules.append("spell: " + sp["name"])
+		if not rules.is_empty():
+			t += "[color=#d9b45a]%s[/color]\n" % ", ".join(rules)
+	else:
+		for sid in f.skills:
+			var sk := Catalog.skill(f.faction, sid)
+			t += "[color=#d9b45a]%s[/color]: %s\n" % [sk.get("name", sid), sk.get("text", "")]
+		for sr in Catalog.fighter_def(f.faction, f.def_id).get("special_rules", []):
+			t += "[color=#d9b45a]%s[/color]: %s\n" % [sr["name"], sr["text"]]
+	if full and not f.prepared.is_empty():
 		t += "\n[b]Prepared spells[/b]\n"
 		for sp in f.prepared:
-			t += "• %s (%d+ / crit %s+): %s\n" % [sp["name"], sp["casting"], sp.get("critical", "-"), sp["text"]]
+			t += "• %s (%d+ / crit %s+): %s\n" % [sp["name"], int(sp["casting"]), UI.num(sp.get("critical", "-")), sp["text"]]
 	var st: PackedStringArray = []
 	for k in f.statuses:
-		if f.statuses[k] is bool and f.statuses[k] and not k in ["damaged_this_activation", "bloodied_at_start"]:
+		if f.statuses[k] is bool and f.statuses[k] and not k in ["damaged_this_activation", "bloodied_at_start", "damaged_ever", "fall_check", "cursed_coin_damage", "drawn_power_used_window"]:
 			st.append(k.replace("_", " "))
 		elif k in ["witchfire", "engineering", "fuse"]:
 			st.append("%s %s" % [k, f.statuses[k]])
@@ -278,11 +324,18 @@ func _update_card() -> void:
 		st.append("BLOODIED")
 	if not st.is_empty():
 		t += "\n[color=#e0a060]Status: %s[/color]" % ", ".join(st)
-	card.text = t
+	return t
 
 
 static func _tn(v) -> String:
-	return "-" if v == null else "%s+" % v
+	return "-" if v == null else "%s+" % _num(v)
+
+
+## JSON numbers load as floats: show 6.0 as "6", keep strings like "2d6".
+static func _num(v) -> String:
+	if v is float and is_equal_approx(v, roundf(v)):
+		return str(int(v))
+	return str(v)
 
 
 # =============================================================================================
@@ -373,7 +426,10 @@ func _actions_activation() -> void:
 			bt.disabled = err != ""
 			act.append(bt)
 		if not engaged:
-			act.append(UI.button("Hide", func(): _do(Combat.hide(b)), "Must be touching terrain and more than 3\" from enemies"))
+			var why := Combat.hide_problem(b, f)
+			var hb := UI.button("Hide" if why == "" else "Hide — %s" % why, func(): _do(Combat.hide(b)), "Hide (p.27): touching terrain, not engaged, and more than 3\" from all enemies.")
+			hb.disabled = why != ""
+			act.append(hb)
 		if f.is_caster() and Magic.can_use_arcane(b, f) == "":
 			act.append(UI.button("Draw power", func(): _do(Magic.draw_power(b)), "+1 casting die next activation"))
 			for sp in f.prepared:
@@ -397,8 +453,8 @@ func _actions_activation() -> void:
 
 func _actions_move(f: FighterState) -> void:
 	var kind: String = b.move_plan.get("kind", "")
-	var ev := Movement.evaluate(b, _full_path(), pickup_box != null and pickup_box.button_pressed)
-	_header("%s move: up to %.1f\". Click the table to add waypoints (Enter to confirm)." % [kind.capitalize(), b.move_plan.get("allowance", 0.0)], f.player)
+	var ev := Movement.evaluate(b, _full_path(), pickup_box != null and pickup_box.button_pressed, _full_levels(), descend)
+	_header("%s move: up to %.1f\". Click the destination (click again to change it); Shift+click adds a bend. Roofs and floors work too (Alt+click = ground). Enter confirms." % [kind.capitalize(), b.move_plan.get("allowance", 0.0)], f.player)
 	var info := "Used %.1f\" of %.1f\"" % [ev["cost"], ev["allowance"]]
 	if ev["crossings"] > 0:
 		info += " (incl. %d\" low terrain)" % ev["crossings"]
@@ -406,12 +462,18 @@ func _actions_move(f: FighterState) -> void:
 		info = "Click where the fighter should go."
 	elif not ev["ok"]:
 		info += " — " + ev["error"]
+	else:
+		var methods: PackedStringArray = ev.get("methods", PackedStringArray())
+		if not methods.is_empty():
+			info += " (" + ", ".join(methods) + ")"
+		if not ev["drops"].is_empty():
+			info += " — jumping down %.0f\": impact damage!" % ev["drops"].max()
 	actions.add_child(UI.label(info, 14, Color("ff8a70") if (not ev["ok"] and not waypoints.is_empty()) else App.PAPER))
 	var btns: Array = []
 	var confirm := UI.button("Confirm move", _confirm_move)
 	confirm.disabled = not ev["ok"]
 	btns.append(confirm)
-	btns.append(UI.button("Remove last point", func(): if not waypoints.is_empty(): waypoints.resize(waypoints.size() - 1); _refresh()))
+	btns.append(UI.button("Undo last point", func(): if not waypoints.is_empty(): waypoints.resize(waypoints.size() - 1); _refresh()))
 	btns.append(UI.button("Clear path", func(): waypoints.clear(); _refresh()))
 	if kind == "normal":
 		btns.append(UI.button("Cancel move", func(): _do(Movement.cancel(b)); waypoints.clear()))
@@ -423,6 +485,10 @@ func _actions_move(f: FighterState) -> void:
 		btns.append(pickup_box)
 	if kind == "charge":
 		btns.append(UI.button("Charge fails (end activation)", func(): waypoints.clear(); _do(Movement.fail_charge(b))))
+	var dsc := UI.option(["Getting down: auto", "Climb down", "Jump down"], ["auto", "climb", "jump"].find(descend))
+	dsc.item_selected.connect(func(i): descend = ["auto", "climb", "jump"][i]; _refresh())
+	dsc.tooltip_text = "Auto: ladder if there is one, jump small drops, climb bigger ones."
+	btns.append(dsc)
 	_row(btns)
 
 
@@ -543,6 +609,20 @@ func _actions_pending() -> void:
 			_row([UI.button("Fight!", func(): var o := _melee_opts(mode_data["def_store"]); mode_data.erase("def_store"); _do(b.respond(o)))])
 		"duel_turn":
 			_actions_duel(p)
+		"pick_quarter":
+			_header("%s: pick a quarter to be the forsaken quarter this round (it can't be controlled)." % b.player_names[who], who)
+			var qb: Array = []
+			for q in 4:
+				qb.append(UI.button("Quarter %d (%s)" % [q + 1, ["north-west", "north-east", "south-east", "south-west"][q]], func(): _do(b.respond({"quarter": q}))))
+			qb.append(UI.button("None", func(): _do(b.respond({"quarter": -1}))))
+			_row(qb)
+		"pick_fighter":
+			_header("%s: you trail on victory points — condemn an enemy fighter (+1 VP if taken down this round)." % b.player_names[who], who)
+			var fb: Array = []
+			for uid in p["candidates"]:
+				fb.append(UI.button(b.fighter(uid).name, func(): _do(b.respond({"uid": uid}))))
+			fb.append(UI.button("None", func(): _do(b.respond({"uid": -1}))))
+			_row(fb)
 		"volley":
 			_header("Volley: all %d attacks go at the target unless you spread them to enemies within 3\" of it." % p["attacks"], who)
 			if not mode_data.has("volley"):
@@ -593,7 +673,7 @@ func _actions_placement(p: Dictionary) -> void:
 	for uid in p["uids"]:
 		lines.append("%s%s" % ["✔ " if placements.has(uid) else "• ", b.fighter(uid).name])
 	actions.add_child(UI.label(", ".join(lines), 13))
-	_row([UI.button("Auto-place the rest", func(): _do(b.respond({"positions": placements.duplicate()})); placements.clear()),
+	_row([UI.button("Auto-place the rest", _submit_placements),
 		UI.button("Clear", func(): placements.clear(); _refresh())])
 
 
@@ -663,12 +743,24 @@ func _full_path() -> PackedVector2Array:
 	if f == null:
 		return out
 	out.append(f.pos)
-	out.append_array(waypoints)
+	for w in waypoints:
+		out.append(Vector2(w.x, w.y))
+	return out
+
+
+func _full_levels() -> PackedFloat32Array:
+	var f := b.active_fighter()
+	var out := PackedFloat32Array()
+	if f == null:
+		return out
+	out.append(f.elev)
+	for w in waypoints:
+		out.append(w.z)
 	return out
 
 
 func _confirm_move() -> void:
-	var err := Movement.commit(b, _full_path(), pickup_box != null and pickup_box.button_pressed)
+	var err := Movement.commit(b, _full_path(), pickup_box != null and pickup_box.button_pressed, _full_levels(), descend)
 	if err == "":
 		waypoints.clear()
 		mode = "idle"
@@ -712,6 +804,9 @@ func _start_spell(sp: Dictionary) -> void:
 		"point", "summon":
 			mode = "spell_point"
 			_hint = "%s: click a point within %.0f\"." % [sp["name"], info.get("range", 0.0)]
+		"two_points":
+			mode = "spell_point"
+			_hint = "%s: click the barrier's first end, then its second (each within %.0f\", ends up to %.0f\" apart)." % [sp["name"], info["range"], info["gap"]]
 		"dir":
 			mode = "spell_point"
 			_hint = "%s: click to aim." % sp["name"]
@@ -772,9 +867,10 @@ func _unhandled_input(event: InputEvent) -> void:
 				board.zoom(1.1)
 			MOUSE_BUTTON_LEFT:
 				if mb.pressed:
-					var p := board.ground_point(mb.position)
-					if p != Vector2.INF:
-						_click(p, mb.double_click)
+					var p3 := board.surface_point(mb.position, Input.is_key_pressed(KEY_ALT))
+					var hit := board.fighter_at_screen(mb.position)
+					if p3 != Vector3.INF:
+						_click(Vector2(p3.x, p3.y), p3.z, hit, mb.double_click)
 	elif event is InputEventMouseMotion:
 		var mm := event as InputEventMouseMotion
 		if _rotating:
@@ -782,12 +878,17 @@ func _unhandled_input(event: InputEvent) -> void:
 		elif _panning:
 			board.pan(mm.relative)
 		else:
-			hover = board.ground_point(mm.position)
+			var h3 := board.surface_point(mm.position, Input.is_key_pressed(KEY_ALT))
+			hover = Vector2(h3.x, h3.y) if h3 != Vector3.INF else Vector2.INF
+			hover_level = h3.z if h3 != Vector3.INF else 0.0
+			_update_tip(mm.position)
 			if mode in ["move", "blast", "flame", "spell_point"] or b.pending.get("type", "") in ["deploy", "place"]:
 				_update_board()
 				if mode == "move":
 					_update_actions()
-	elif event is InputEventKey and event.pressed:
+	elif event is InputEventKey and event.keycode == KEY_SHIFT and mode == "move":
+		_update_board()
+	if event is InputEventKey and event.pressed:
 		match event.keycode:
 			KEY_ESCAPE:
 				if mode == "move":
@@ -822,18 +923,39 @@ func _process(delta: float) -> void:
 		board.pan(v * 900 * delta)
 
 
-func _click(p: Vector2, double := false) -> void:
-	var hit := board.fighter_at(p)
+## Floating profile of the fighter under the mouse, plus its distance from the activating (or selected) fighter.
+func _update_tip(mouse: Vector2) -> void:
+	var f := board.fighter_at_screen(mouse)
+	if f == null:
+		tip.visible = false
+		return
+	var t := _fighter_text(f, false)
+	var ref := b.active_fighter() if b.active_fighter() else b.fighter(selected)
+	if ref != null and ref != f and ref.on_board():
+		var vis := Effects.visibility(b, ref, f)
+		t += "\n[color=#a0c0ff]%.1f\" from %s%s%s[/color]" % [Effects.dist(ref, f), ref.name,
+			"" if vis["visible"] else " · not visible", " · obscured (cover)" if vis["visible"] and vis["obscured"] else ""]
+	tip_text.text = t
+	tip.reset_size()
+	var vp := get_viewport().get_visible_rect().size
+	var pos := mouse + Vector2(18, 18)
+	pos.x = minf(pos.x, vp.x - tip.size.x - 4)
+	pos.y = minf(pos.y, vp.y - tip.size.y - 4)
+	tip.position = pos
+	tip.visible = true
+
+
+func _click(p: Vector2, level := 0.0, hit: FighterState = null, double := false) -> void:
 	var pt: String = b.pending.get("type", "")
 	if table_mode:
 		if hit != null:
 			_select(hit.uid)
 		elif selected >= 0 and b.fighter(selected) and b.fighter(selected).on_board():
-			Movement.place(b, b.fighter(selected), p)
+			Movement.place(b, b.fighter(selected), p, level)
 			_table_log("%s moved by hand" % b.fighter(selected).name)
 		return
 	if pt in ["deploy", "place"]:
-		_click_placement(p, hit)
+		_click_placement(p, level, hit)
 		return
 	if pt == "pick_entry":
 		var cs := Scenario.corners(b)
@@ -845,7 +967,14 @@ func _click(p: Vector2, double := false) -> void:
 	var f := b.active_fighter()
 	match mode:
 		"move":
-			waypoints.append(p)
+			# Click sets (or moves) the destination; Shift+click adds a bend before it.
+			var w := Vector3(p.x, p.y, level)
+			if waypoints.is_empty():
+				waypoints.append(w)
+			elif Input.is_key_pressed(KEY_SHIFT):
+				waypoints.insert(waypoints.size() - 1, w)
+			else:
+				waypoints[waypoints.size() - 1] = w
 			_refresh()
 			return
 		"shoot":
@@ -855,7 +984,7 @@ func _click(p: Vector2, double := false) -> void:
 					_set_mode("idle")
 			return
 		"blast":
-			_do(Combat.shoot_blast(b, mode_data["weapon"], p))
+			_do(Combat.shoot_blast(b, mode_data["weapon"], p, level))
 			if not _hint_error:
 				_set_mode("idle")
 			return
@@ -867,7 +996,7 @@ func _click(p: Vector2, double := false) -> void:
 		"spell":
 			var info: Dictionary = mode_data["info"]
 			if info["target"] == "friendly_point" and mode_data.has("target"):
-				_do(Magic.cast(b, mode_data["spell"], {"target": mode_data["target"], "point": p}))
+				_do(Magic.cast(b, mode_data["spell"], {"target": mode_data["target"], "point": p, "elev": level}))
 				if not _hint_error:
 					_set_mode("idle")
 				return
@@ -883,7 +1012,14 @@ func _click(p: Vector2, double := false) -> void:
 			return
 		"spell_point":
 			var info2: Dictionary = mode_data["info"]
-			var params := {"dir": p - f.pos} if info2["target"] == "dir" else {"point": p}
+			if info2["target"] == "two_points" and not mode_data.has("first"):
+				mode_data["first"] = p
+				_hint = "Now click the barrier's other end."
+				_refresh()
+				return
+			var params := {"dir": p - f.pos} if info2["target"] == "dir" else {"point": p, "elev": level}
+			if info2["target"] == "two_points":
+				params = {"point": mode_data["first"], "point2": p, "elev": level}
 			_do(Magic.cast(b, mode_data["spell"], params))
 			if not _hint_error:
 				_set_mode("idle")
@@ -892,7 +1028,7 @@ func _click(p: Vector2, double := false) -> void:
 			var a: Dictionary = mode_data["ability"]
 			var prm := {}
 			if a["needs"] == "point":
-				prm = {"point": p}
+				prm = {"point": p, "elev": level}
 			elif hit:
 				prm = {"target": hit.uid}
 			else:
@@ -907,7 +1043,7 @@ func _click(p: Vector2, double := false) -> void:
 			_do(b.activate(hit.uid))
 
 
-func _click_placement(p: Vector2, hit: FighterState) -> void:
+func _click_placement(p: Vector2, level: float, hit: FighterState) -> void:
 	var pend := b.pending
 	if hit and placements.has(hit.uid):
 		placements.erase(hit.uid)
@@ -918,20 +1054,29 @@ func _click_placement(p: Vector2, hit: FighterState) -> void:
 		if placements.has(uid):
 			continue
 		var f := b.fighter(uid)
-		var err := Scenario.zone_ok(b, f, p, pend["zone"])
+		var err := Scenario.zone_ok(b, f, p, pend["zone"], level)
 		if err != "":
 			_do(err)
 			return
-		placements[uid] = p
+		placements[uid] = Vector3(p.x, p.y, level)
 		f.pos = p
+		f.elev = level
 		f.where = "board"   # shown on the table while placing; respond() validates again
 		if placements.size() == pend["uids"].size():
-			var all := placements.duplicate()
-			placements.clear()
-			_do(b.respond({"positions": all}))
+			_submit_placements()
 		else:
 			_refresh()
 		return
+
+
+func _submit_placements() -> void:
+	var pos := {}
+	var lv := {}
+	for uid in placements:
+		pos[uid] = Vector2(placements[uid].x, placements[uid].y)
+		lv[uid] = placements[uid].z
+	placements.clear()
+	_do(b.respond({"positions": pos, "elevs": lv}))
 
 
 # =============================================================================================
@@ -945,7 +1090,7 @@ func _update_board() -> void:
 	var sel := b.fighter(selected)
 	# Engagement ring and weapon ranges for the selected fighter.
 	if sel and sel.on_board():
-		lines.append({"pts": Board3D.circle(sel.pos, sel.radius + 1.0), "color": Color(1, 1, 1, 0.25), "closed": true})
+		lines.append({"pts": Board3D.circle(sel.pos, sel.radius + 1.0), "color": Color(1, 1, 1, 0.25), "closed": true, "z": sel.elev})
 		for w in sel.usable_ranged():
 			var r := Effects.range_for(b, sel, w)
 			if r > 0:
@@ -958,29 +1103,37 @@ func _update_board() -> void:
 		for t in Combat.ranged_targets(b, f, w):
 			highlight[t["uid"]] = Color("60e060") if t["legal"] else Color(0.8, 0.25, 0.2)
 	if mode == "move" and f:
+		# The path follows the mouse only until a destination is picked, or while Shift places a bend.
 		var path := _full_path()
-		var with_hover := path.duplicate()
-		if hover != Vector2.INF:
-			with_hover.append(hover)
-		var ev := Movement.evaluate(b, with_hover, pickup_box != null and pickup_box.button_pressed)
-		lines.append({"pts": with_hover, "color": Color("80ff80") if ev["ok"] else Color("ff7060")})
-		lines.append({"pts": Board3D.circle(f.pos, b.move_plan.get("allowance", 0.0) + 0.0, 96), "color": Color(0.5, 0.8, 1.0, 0.25), "closed": true})
-		if hover != Vector2.INF:
-			lines.append({"pts": Board3D.circle(hover, f.radius), "color": Color("80ff80") if ev["ok"] else Color("ff7060"), "closed": true})
+		var lv := _full_levels()
+		var tether := hover != Vector2.INF and (waypoints.is_empty() or Input.is_key_pressed(KEY_SHIFT))
+		if tether:
+			var at := path.size() if waypoints.is_empty() else path.size() - 1
+			path.insert(at, hover)
+			lv.insert(at, hover_level)
+		var ev := Movement.evaluate(b, path, pickup_box != null and pickup_box.button_pressed, lv, descend)
+		var col := Color("80ff80") if ev["ok"] else Color("ff7060")
+		if path.size() >= 2:
+			lines.append({"pts": path, "color": col, "levels": Array(lv)})
+			var end := path[path.size() - 1]
+			lines.append({"pts": Board3D.circle(end, f.radius), "color": col, "closed": true, "z": lv[lv.size() - 1]})
+		lines.append({"pts": Board3D.circle(f.pos, b.move_plan.get("allowance", 0.0) + 0.0, 96), "color": Color(0.5, 0.8, 1.0, 0.25), "closed": true, "z": f.elev})
 	if mode == "blast" and hover != Vector2.INF:
-		fills.append({"poly": Board3D.circle(hover, Combat.BLAST_RADIUS), "color": Color(1, 0.5, 0.1, 0.35)})
-	if mode == "spell_point" and hover != Vector2.INF and f:
+		fills.append({"poly": Board3D.circle(hover, Combat.BLAST_RADIUS), "color": Color(1, 0.5, 0.1, 0.35), "z": hover_level})
+	if mode == "spell_point" and hover != Vector2.INF and f and mode_data["info"]["target"] == "two_points" and mode_data.has("first"):
+		lines.append({"pts": PackedVector2Array([mode_data["first"], hover]), "color": Color(0.7, 0.4, 1.0), "z": hover_level + 0.5})
+	elif mode == "spell_point" and hover != Vector2.INF and f:
 		if mode_data["info"]["target"] == "dir":
 			fills.append({"poly": Geo.flame_polygon(f.pos + (hover - f.pos).normalized() * f.radius, hover - f.pos, 8.0, float(b.cfg["flame_end_radius"])), "color": Color(0.6, 0.2, 1.0, 0.35)})
 		else:
-			fills.append({"poly": Board3D.circle(hover, Combat.BLAST_RADIUS), "color": Color(0.6, 0.2, 1.0, 0.35)})
+			fills.append({"poly": Board3D.circle(hover, Combat.BLAST_RADIUS), "color": Color(0.6, 0.2, 1.0, 0.35), "z": hover_level})
 			lines.append({"pts": Board3D.circle(f.pos, f.radius + float(mode_data["info"].get("range", 0.0)), 96), "color": Color(0.7, 0.4, 1.0, 0.4), "closed": true})
 	if mode == "flame" and hover != Vector2.INF and f:
 		fills.append({"poly": Geo.flame_polygon(f.pos + (hover - f.pos).normalized() * f.radius, hover - f.pos, 8.0, float(b.cfg["flame_end_radius"])), "color": Color(1, 0.4, 0.1, 0.4)})
 	var lt: Dictionary = b.scen.get("last_template", {})
 	if not lt.is_empty() and lt.get("round", -1) == b.round_no:
 		if lt["type"] == "blast":
-			lines.append({"pts": Board3D.circle(lt["pos"], Combat.BLAST_RADIUS), "color": Color(1, 0.6, 0.2, 0.6), "closed": true})
+			lines.append({"pts": Board3D.circle(lt["pos"], Combat.BLAST_RADIUS), "color": Color(1, 0.6, 0.2, 0.6), "closed": true, "z": float(lt.get("elev", 0.0))})
 		else:
 			lines.append({"pts": Geo.flame_polygon(lt["origin"], lt["dir"], 8.0, float(b.cfg["flame_end_radius"])), "color": Color(1, 0.6, 0.2, 0.6), "closed": true})
 	if b.pending.get("type", "") in ["deploy", "place"]:
@@ -989,8 +1142,8 @@ func _update_board() -> void:
 			for uid in b.pending["uids"]:
 				if not placements.has(uid):
 					var nf := b.fighter(uid)
-					var ok := Scenario.zone_ok(b, nf, hover, b.pending["zone"]) == ""
-					lines.append({"pts": Board3D.circle(hover, nf.radius), "color": Color("80ff80") if ok else Color("ff7060"), "closed": true})
+					var ok := Scenario.zone_ok(b, nf, hover, b.pending["zone"], hover_level) == ""
+					lines.append({"pts": Board3D.circle(hover, nf.radius), "color": Color("80ff80") if ok else Color("ff7060"), "closed": true, "z": hover_level})
 					break
 	if b.pending.get("type", "") == "pick_entry":
 		for c in Scenario.corners(b):
@@ -1013,6 +1166,16 @@ func _update_board() -> void:
 		"street_of_death":
 			var x: float = b.board_size.x if b.scen.get("escape_edge", "east") == "east" else 0.0
 			lines.append({"pts": PackedVector2Array([Vector2(x, 15.5), Vector2(x, 20.5)]), "color": Color(0.4, 1, 0.4, 0.8)})
+	for bar in b.scen.get("barriers", []):
+		lines.append({"pts": PackedVector2Array([bar["a"], bar["b"]]), "color": Color(0.7, 0.4, 1.0, 0.9), "z": float(bar["elev"]) + 0.5})
+	var vx: Dictionary = b.scen.get("vortex", {})
+	if not vx.is_empty():
+		fills.append({"poly": Board3D.circle(vx["c"], vx["r"], 32), "color": Color(0.25, 0.0, 0.4, 0.55), "z": float(vx["elev"])})
+	for pit in b.scen.get("pits", []):
+		fills.append({"poly": Board3D.circle(pit["c"], pit["r"], 32), "color": Color(0.15, 0.2, 0.05, 0.7)})
+	for tk in b.tokens:
+		if tk["type"] in ["chest", "tunnel"]:
+			lines.append({"pts": Board3D.circle(tk["pos"], 0.6 if tk["type"] == "chest" else 0.45, 16), "color": Color("e0b84a") if tk["type"] == "chest" else Color(0.6, 0.6, 0.6), "closed": true})
 	var mire: Dictionary = b.scen.get("black_mire", {})
 	if not mire.is_empty():
 		fills.append({"poly": Board3D.circle(mire["point"], mire["radius"], 48), "color": Color(0.2, 0.25, 0.1, 0.35)})

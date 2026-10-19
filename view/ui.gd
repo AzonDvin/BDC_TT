@@ -64,11 +64,18 @@ static func rich(bbcode: String) -> RichTextLabel:
 	return r
 
 
+## JSON numbers load as floats: show 6.0 as "6", keep strings like "2d6" or "flame".
+static func num(v) -> String:
+	if v is float and is_equal_approx(v, roundf(v)):
+		return str(int(v))
+	return str(v)
+
+
 static func weapon_line(w: Dictionary) -> String:
 	var rng := ""
 	if w.has("range"):
-		rng = ("Flame" if str(w["range"]) == "flame" else "%s\"" % w["range"]) + " "
-	var rend := "-" if int(w.get("rend", 0)) == 0 else str(w["rend"])
+		rng = ("Flame" if str(w["range"]) == "flame" else "%s\"" % num(w["range"])) + " "
+	var rend := "-" if int(w.get("rend", 0)) == 0 else num(w["rend"])
 	var crit = w.get("crit")
 	return "%s  %sA%s  R%s  D%s/%s  %s" % [w.get("name", "?"), rng, w.get("attacks", "1"), rend, w.get("damage", "1"), "-" if crit == null else str(crit), ", ".join(w.get("traits", []))]
 

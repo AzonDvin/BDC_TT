@@ -21,7 +21,7 @@ func _ready() -> void:
 	sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	v.add_child(sub)
 	v.add_child(HSeparator.new())
-	for row in [["New Battle", "res://view/battle_setup.tscn"], ["Warband Builder", "res://view/builder.tscn"]]:
+	for row in [["New Battle", "res://view/battle_setup.tscn"], ["Warband Builder", "res://view/builder.tscn"], ["Terrain Editor", "res://view/terrain_editor.tscn"]]:
 		var b := UI.button(row[0], func(): App.go(row[1]))
 		b.custom_minimum_size = Vector2(0, 44)
 		b.add_theme_font_size_override("font_size", 20)

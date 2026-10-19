@@ -43,6 +43,8 @@ static func list(b: Battle, f: FighterState) -> Array:
 		out.append({"id": "engineer_soup", "name": "Engineer: Soup-up (%d pts)" % f.statuses["engineering"], "kind": "bonus", "needs": "friendly"})
 	if int(f.statuses.get("witchfire", 0)) > 0 and not "witchfire" in f.once_per_activation:
 		out.append({"id": "witchfire", "name": "Witchfire Attack (%d)" % f.statuses["witchfire"], "kind": "bonus", "needs": "none"})
+	if Twists.tunnel_index_near(b, f) >= 0:
+		out.append({"id": "tunnel", "name": "Use the Hidden Tunnel", "kind": "bonus", "needs": "none"})
 	if f.has_rule("bestial_transformation") and once.call("bestial_transformation") and fresh:
 		out.append({"id": "transform", "name": "Bestial Transformation", "kind": "bonus", "needs": "none"})
 	if can_act:
@@ -75,6 +77,8 @@ static func use(b: Battle, id: String, params := {}) -> String:
 	if entry["needs"] == "point" and not params.has("point"):
 		return "Pick a point."
 	if entry["kind"] == "action":
+		if not b.harried_check(f, "action"):
+			return ""
 		f.acted = true
 	b.mark_dice_rolled()
 	match id:
@@ -91,13 +95,13 @@ static func use(b: Battle, id: String, params := {}) -> String:
 		"leech_blood":
 			f.once_per_battle.append(id)
 			for o in b.on_board(b.other(f.player)):
-				if Geo.within(f.pos, f.radius, o.pos, o.radius, 9.0) and not b.dice.test(int(o.stats["willpower"]))["pass"]:
+				if Effects.near(f, o, 9.0) and not b.dice.test(int(o.stats["willpower"]))["pass"]:
 					Combat.apply_damage(b, o, 1, f, "Leech Blood")
 					b.heal(f, 1, "Leech Blood")
 		"rite_of_contagion":
 			f.once_per_battle.append(id)
 			for o in b.on_board(b.other(f.player)):
-				if Geo.within(f.pos, f.radius, o.pos, o.radius, 12.0) and not b.dice.test(int(o.stats["willpower"]))["pass"]:
+				if Effects.near(f, o, 12.0) and not b.dice.test(int(o.stats["willpower"]))["pass"]:
 					Combat.apply_damage(b, o, 1, f, "Rite of Contagion")
 					if o.on_board() and o.can_be_poisoned():
 						o.statuses["poisoned"] = true
@@ -107,18 +111,19 @@ static func use(b: Battle, id: String, params := {}) -> String:
 			var pt: Vector2 = params["point"]
 			if f.pos.distance_to(pt) + f.radius > reach + f.radius + Geo.EPS:
 				return "Must be set up wholly within %.0f\"." % reach
-			var probe_err := Magic._placement_ok(b, f, pt)
+			var probe_err := Magic._placement_ok(b, f, pt, params.get("elev", 0.0))
 			if probe_err != "":
 				return probe_err
 			f.once_per_battle.append(id)
 			f.pos = pt
+			f.elev = params.get("elev", 0.0)
 			b.log_line("%s uses %s and reappears elsewhere%s." % [f.name, entry["name"], (" (rolled %.0f\")" % reach) if id == "escape_artist" else ""])
 		"spirit_guardian":
 			f.once_per_battle.append(id)
 			f.add_effect({"id": "spirit_guardian", "until": "round"})
 			b.log_line("%s is shielded by ethereal protection (ignores Rend this round)." % f.name)
 		"winged_familiar":
-			if target.player == f.player or not Geo.within(f.pos, f.radius, target.pos, target.radius, 24.0) or not Effects.visibility(b, f, target)["visible"]:
+			if target.player == f.player or not Effects.near(f, target, 24.0) or not Effects.visibility(b, f, target)["visible"]:
 				return "Pick a visible enemy within 24\"."
 			f.once_per_battle.append(id)
 			target.add_effect({"id": "harried", "until": "round"})
@@ -135,7 +140,7 @@ static func use(b: Battle, id: String, params := {}) -> String:
 			var pt2: Vector2 = params["point"]
 			if not Geo.within(f.pos, f.radius, pt2, 0.5, 3.0):
 				return "The Bomb Rat must be set up within 3\"."
-			var rat := Magic.summon(b, f, "giant_rat", pt2)
+			var rat := Magic.summon(b, f, "giant_rat", pt2, params.get("elev", f.elev))
 			if rat == null:
 				return "No room for the Bomb Rat."
 			f.once_per_battle.append(id)
@@ -144,7 +149,7 @@ static func use(b: Battle, id: String, params := {}) -> String:
 			rat.activated = false
 			b.log_line("%s releases a Bomb Rat with a fuse of %d." % [f.name, rat.statuses["fuse"]])
 		"engineer_patch", "engineer_soup":
-			if target.player != f.player or not Geo.within(f.pos, f.radius, target.pos, target.radius, 1.0) or Effects.is_engaged(b, target):
+			if target.player != f.player or not Effects.near(f, target, 1.0) or Effects.is_engaged(b, target):
 				return "Pick a friendly fighter within 1\" that isn't engaged."
 			f.statuses["engineering"] = int(f.statuses["engineering"]) - 1
 			f.once_per_activation.append("engineer")
@@ -159,13 +164,15 @@ static func use(b: Battle, id: String, params := {}) -> String:
 				b.log_line("%s's %s is souped-up (Rend +1, misfires backfire)." % [target.name, rw[0]["name"]])
 		"witchfire":
 			return Magic.witchfire_attack(b)
+		"tunnel":
+			return Twists.use_tunnel(b, f)
 		"transform":
 			f.once_per_battle.append("bestial_transformation")
 			transform(b, f, true)
 		"recite_holy_litanies":
 			if target.player == f.player or not (target.is_caster() or target.has_kw("Demon") or target.has_kw("Undead")):
 				return "Target a Wizard, Priest, Demon or Undead enemy."
-			if not Geo.within(f.pos, f.radius, target.pos, target.radius, 12.0) or not Effects.visibility(b, f, target)["visible"]:
+			if not Effects.near(f, target, 12.0) or not Effects.visibility(b, f, target)["visible"]:
 				return "The target must be visible and within 12\"."
 			f.once_per_battle.append(id)
 			var ra := b.dice.d6() + int(f.stats["willpower"])
@@ -174,7 +181,7 @@ static func use(b: Battle, id: String, params := {}) -> String:
 			if ra >= rd:
 				Combat.apply_damage(b, target, b.dice.d3(), f, "Holy Litanies")
 		"patch_you_up":
-			if target.player != f.player or not Geo.within(f.pos, f.radius, target.pos, target.radius, 1.0):
+			if target.player != f.player or not Effects.near(f, target, 1.0):
 				return "Pick a friendly fighter within 1\"."
 			var t := b.dice.test(int(f.stats["willpower"]))
 			if t["pass"]:
@@ -216,6 +223,7 @@ static func use(b: Battle, id: String, params := {}) -> String:
 					f.treasure = 1
 			else:
 				b.log_line("%s fails to pry off the lid (rolled %d)." % [f.name, r2])
+	b.after_action()
 	b.changed.emit()
 	return ""
 
@@ -269,7 +277,7 @@ static func start_of_activation(b: Battle, f: FighterState) -> bool:
 
 static func detonate_bomb_rat(b: Battle, rat: FighterState) -> void:
 	var profile := {"name": "Bomb Rat", "rend": -2, "damage": "d3", "crit": null, "traits": [], "kind": "special"}
-	for o in Combat.blast_hits(b, rat.pos):
+	for o in Combat.blast_hits(b, rat.pos, rat.elev):
 		if o != rat:
 			Combat.resolve_hit(b, rat, o, profile, false, {"melee": false, "rend": -2})
 	rat.where = "down"

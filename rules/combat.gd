@@ -21,6 +21,9 @@ static func apply_damage(b: Battle, f: FighterState, amount: int, source: Fighte
 			return
 	f.life -= amount
 	f.statuses["damaged_this_activation"] = true
+	f.statuses["damaged_ever"] = true
+	if f.elev > Height.LEVEL_EPS:
+		f.statuses["fall_check"] = true
 	if f.life <= 0:
 		f.life = 0
 		take_down(b, f, source, why)
@@ -46,11 +49,11 @@ static func take_down(b: Battle, f: FighterState, by: FighterState, why := "") -
 		apply_damage(b, victim, d, f, "Drag Down Into the Earth")
 	if f.has_rule("vessel_of_black_rot"):
 		for o in b.on_board(b.other(f.player)):
-			if Geo.within(f.pos, f.radius, o.pos, o.radius, 6.0) and o.can_be_poisoned() and b.dice.d6() >= 4:
+			if Effects.near(f, o, 6.0) and o.can_be_poisoned() and b.dice.d6() >= 4:
 				o.statuses["poisoned"] = true
 				b.log_line("%s is poisoned by the Vessel of Black Rot." % o.name)
 	for o in b.on_board():
-		if o.has_rule("last_rites") and Geo.within(f.pos, f.radius, o.pos, o.radius, 6.0):
+		if o.has_rule("last_rites") and Effects.near(f, o, 6.0):
 			b.heal(o, 1, "Last Rites")
 	if f.has_rule("rise_again") and not "rise_again" in f.once_per_battle:
 		f.statuses["rise_again_marker"] = f.pos
@@ -84,7 +87,15 @@ static func resolve_hit(b: Battle, att: FighterState, tgt: FighterState, profile
 	else:
 		var r := b.dice.d6()
 		saved = r >= needed
-		text += ": armour %d+%s, rolled %d — %s" % [armour, (" vs Rend %d (needs %d+)" % [rend, needed]) if rend != 0 else "", r, "SAVED" if saved else "not saved"]
+		if saved and tgt.has_effect("doomed"):
+			tgt.remove_effect("doomed")
+			var r2 := b.dice.d6()
+			text += ": armour %d+, rolled %d but DOOMED — re-rolled %d" % [armour, r, r2]
+			r = r2
+			saved = r >= needed
+			text += " — %s" % ("SAVED" if saved else "not saved")
+		else:
+			text += ": armour %d+%s, rolled %d — %s" % [armour, (" vs Rend %d (needs %d+)" % [rend, needed]) if rend != 0 else "", r, "SAVED" if saved else "not saved"]
 	var dealt := 0
 	if saved:
 		if crit and _profile_has(att, profile, "Bludgeon"):
@@ -135,7 +146,7 @@ static func ranged_targets(b: Battle, f: FighterState, w: Dictionary) -> Array:
 	var engaged := Effects.engaged_enemies(b, f)
 	var point_blank := not engaged.is_empty()
 	for o in b.on_board(b.other(f.player)):
-		var gap := Geo.base_gap(f.pos, f.radius, o.pos, o.radius)
+		var gap := Effects.dist(f, o)
 		var vis := Effects.visibility(b, f, o)
 		var e := {"uid": o.uid, "gap": gap, "obscured": vis["obscured"], "visible": vis["visible"], "legal": false, "reason": ""}
 		if point_blank:
@@ -235,13 +246,15 @@ static func shoot(b: Battle, weapon_id: String, target_uid: int) -> String:
 				return "Illegal target: %s." % e["reason"]
 	if not legal:
 		return "Illegal target."
+	if not b.harried_check(f, "action"):
+		return ""
 	var attacks := b.dice.roll(w["attacks"])
 	b.mark_dice_rolled()
 	if Effects.weapon_has(f, w, "Volley") and attacks > 1:
 		var t := b.fighter(target_uid)
 		var cands: Array = []
 		for o in b.on_board(b.other(f.player)):
-			if o != t and Geo.within(t.pos, t.radius, o.pos, o.radius, 3.0) and not Effects.is_engaged(b, o) and Effects.visibility(b, f, o)["visible"]:
+			if o != t and Effects.near(t, o, 3.0) and not Effects.is_engaged(b, o) and Effects.visibility(b, f, o)["visible"]:
 				cands.append(o.uid)
 		if not cands.is_empty():
 			b.pending = {"type": "volley", "player": f.player, "weapon": weapon_id, "primary": target_uid, "attacks": attacks, "candidates": cands}
@@ -309,6 +322,7 @@ static func _resolve_ranged(b: Battle, f: FighterState, w: Dictionary, targets: 
 	if natural_ones > 0 and Effects.weapon_has(f, w, "Misfire"):
 		misfire(b, f, w)
 	_scare(b, f, w, hit_fighters)
+	b.after_action()
 	b.changed.emit()
 
 
@@ -346,27 +360,33 @@ static func _scare(b: Battle, f: FighterState, w: Dictionary, hit_fighters: Arra
 
 # --- Templates ---------------------------------------------------------------------------------
 
-static func point_visible(b: Battle, from: Vector2, to: Vector2, ignore: Array = []) -> bool:
-	for t in b.terrain:
-		if t.blocks_sight(1.6) and Geo.segment_crosses_polygon(from, to, t.polygon):
-			return false
-	for o in b.on_board():
-		if not o in ignore and Geo.segment_hits_circle(from, to, o.pos, o.radius * 0.9) and o.pos.distance_to(to) > o.radius:
-			return false
-	return true
+## Can a point (at height to_z) be seen from `from` (eye height from_z)? Used for template placement.
+static func point_visible(b: Battle, from: Vector2, to: Vector2, ignore: Array = [], from_z := 1.5, to_z := 0.3) -> bool:
+	var obs: FighterState = ignore[0] if not ignore.is_empty() else null
+	var tgt: FighterState = ignore[1] if ignore.size() > 1 else null
+	return not Effects.sight_blocked(b, Vector3(from.x, from.y, from_z), Vector3(to.x, to.y, to_z), obs, tgt)
 
 
-## Fighters hit by a blast template centred at `c` (p.31), plus fighters engaged with them.
-static func blast_hits(b: Battle, c: Vector2) -> Array:
+## Fighters hit by a blast template centred at `c` on level `elev` (p.31), plus fighters engaged with them.
+## Fighters 3" or more above or below the centre aren't hit; visibility and cover are judged from the centre.
+static func blast_hits(b: Battle, c: Vector2, elev := 0.0) -> Array:
 	var hit: Array = []
 	for o in b.on_board():
+		if absf(o.elev - elev) >= 3.0:
+			continue
 		if o.pos.distance_to(c) - o.radius <= BLAST_RADIUS + Geo.EPS:
 			var probe := FighterState.new()
 			probe.pos = c
-			var vis := Effects.visibility_from_point(b, c, probe, o, true)
+			var vis := Effects.visibility_from_point(b, c, elev + 0.5, probe, o, true)
 			if vis["visible"]:
 				hit.append(o)
 	return _with_engaged(b, hit)
+
+
+static func blast_cover(b: Battle, c: Vector2, elev: float, t: FighterState) -> bool:
+	var probe := FighterState.new()
+	probe.pos = c
+	return Effects.visibility_from_point(b, c, elev + 0.5, probe, t, true)["obscured"]
 
 
 ## Fighters hit by the flame template from fighter f pointing along dir (p.32), plus engaged fighters.
@@ -374,7 +394,7 @@ static func flame_hits(b: Battle, f: FighterState, dir: Vector2) -> Array:
 	var poly := Geo.flame_polygon(f.pos + dir.normalized() * f.radius, dir, 8.0, float(b.cfg["flame_end_radius"]))
 	var hit: Array = []
 	for o in b.on_board():
-		if o != f and Geo.base_overlaps_polygon(o.pos, o.radius, poly) and Effects.visibility_from_point(b, f.pos, f, o, true)["visible"]:
+		if o != f and absf(o.elev - f.elev) < 3.0 and Geo.base_overlaps_polygon(o.pos, o.radius, poly) and Effects.visibility_from_point(b, f.pos, Effects.eye_height(f), f, o, true)["visible"]:
 			hit.append(o)
 	return _with_engaged(b, hit)
 
@@ -407,7 +427,7 @@ static func scatter_point(b: Battle, c: Vector2, inches: float) -> Vector2:
 	return p
 
 
-static func shoot_blast(b: Battle, weapon_id: String, point: Vector2) -> String:
+static func shoot_blast(b: Battle, weapon_id: String, point: Vector2, elev := 0.0) -> String:
 	var f := b.active_fighter()
 	var w := f.weapon_by_id(weapon_id) if f else {}
 	var err := check_can_shoot(b, f, w)
@@ -416,9 +436,10 @@ static func shoot_blast(b: Battle, weapon_id: String, point: Vector2) -> String:
 	if not Effects.weapon_has(f, w, "Blast"):
 		return "Not a blast weapon."
 	var rng := Effects.range_for(b, f, w)
-	if f.pos.distance_to(point) - f.radius > rng + Geo.EPS:
+	var d3 := Vector2(f.pos.distance_to(point) - f.radius, elev - f.elev).length()
+	if d3 > rng + Geo.EPS:
 		return "That point is out of range (%.0f\")." % rng
-	if not point_visible(b, f.pos, point, [f]):
+	if not point_visible(b, f.pos, point, [f], Effects.eye_height(f), elev + 0.3):
 		return "That point isn't visible."
 	if not _point_blank_gate(b, f):
 		f.acted = true
@@ -436,17 +457,17 @@ static func shoot_blast(b: Battle, weapon_id: String, point: Vector2) -> String:
 	if nat + mod < Effects.hit_value(f, true):
 		var dist := b.dice.d6() * 2
 		c = scatter_point(b, point, dist)
+		if elev > 0.0 and not Height.supports(b, c, elev):
+			elev = Height.level_below(b, c, elev)
 		b.log_line("%s fires %s: rolled %d — miss, the blast scatters %d\"." % [f.name, w["name"], nat, dist])
 	else:
 		b.log_line("%s fires %s: rolled %d — on target." % [f.name, w["name"], nat])
-	b.scen["last_template"] = {"type": "blast", "pos": c, "round": b.round_no}
-	var hits := blast_hits(b, c)
+	b.scen["last_template"] = {"type": "blast", "pos": c, "elev": elev, "round": b.round_no}
+	var hits := blast_hits(b, c, elev)
 	for t in hits:
-		var probe := FighterState.new()
-		probe.pos = c
-		var vis := Effects.visibility_from_point(b, c, probe, t, true)
-		resolve_hit(b, f, t, w, false, {"melee": false, "cover": vis["obscured"], "rend": Effects.rend_for(b, f, w, t)})
+		resolve_hit(b, f, t, w, false, {"melee": false, "cover": blast_cover(b, c, elev, t), "rend": Effects.rend_for(b, f, w, t)})
 	_scare(b, f, w, hits)
+	b.after_action()
 	b.changed.emit()
 	return ""
 
@@ -472,6 +493,7 @@ static func shoot_flame(b: Battle, weapon_id: String, dir: Vector2) -> String:
 	for t in hits:
 		resolve_hit(b, f, t, w, false, {"melee": false, "cover": false, "rend": Effects.rend_for(b, f, w, t)})
 	_scare(b, f, w, hits)
+	b.after_action()
 	b.changed.emit()
 	return ""
 
@@ -479,17 +501,27 @@ static func shoot_flame(b: Battle, weapon_id: String, dir: Vector2) -> String:
 # =============================================================================================
 # Other actions
 
+## Why the active fighter can't hide right now, or "" if it can (p.27).
+static func hide_problem(b: Battle, f: FighterState) -> String:
+	if f == null or not b.can_still_act(f):
+		return "no action left"
+	if Effects.is_engaged(b, f):
+		return "engaged in melee"
+	if not Effects.touching_terrain(b, f):
+		return "not touching terrain (move up against a wall or other terrain)"
+	for o in b.on_board(b.other(f.player)):
+		if Effects.near(f, o, 3.0):
+			return "%s is within 3\" (%.1f\")" % [o.name, Effects.dist(f, o)]
+	return ""
+
+
 static func hide(b: Battle) -> String:
 	var f := b.active_fighter()
-	if f == null or not b.can_still_act(f):
-		return "Can't make an action now."
-	if Effects.is_engaged(b, f):
-		return "Can't hide while engaged."
-	if not Effects.touching_terrain(b, f):
-		return "Must be touching terrain to hide."
-	for o in b.on_board(b.other(f.player)):
-		if Geo.within(f.pos, f.radius, o.pos, o.radius, 3.0):
-			return "Must be more than 3\" from all enemies to hide."
+	var problem := hide_problem(b, f)
+	if problem != "":
+		return "Can't hide: " + problem + "."
+	if not b.harried_check(f, "action"):
+		return ""
 	f.acted = true
 	f.statuses["hidden"] = true
 	b.log_line("%s hides." % f.name)
@@ -570,6 +602,8 @@ static func start_melee(b: Battle, target_uid: int, opts: Dictionary) -> String:
 	var err := _check_weapons(f, opts.get("weapons", []))
 	if err != "":
 		return err
+	if not b.harried_check(f, "action"):
+		return ""
 	f.acted = true
 	b.mark_dice_rolled()
 	b.duel = {"att": f.uid, "def": t.uid, "att_w": opts.get("weapons", [f.melee[0]["id"]]), "att_opts": opts,
@@ -858,6 +892,7 @@ static func _end_duel(b: Battle) -> void:
 	b.log_line("The melee attack action ends.")
 	b.duel = {}
 	b.pending = {}
+	b.after_action()
 	var a := b.active_fighter()
 	if a != null and not a.on_board():
 		b.end_activation()

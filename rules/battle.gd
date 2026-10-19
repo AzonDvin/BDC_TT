@@ -12,7 +12,6 @@ signal changed
 signal logged(text: String)
 
 var cfg := {
-	"low_cover_range": 2.0,        # low terrain within this distance of the target's base obscures it
 	"flame_end_radius": 1.25,      # half-width of the flame template's round end (diagram missing in v1.03)
 	"bloodied_strict": true,       # bloodied: a Charge counts as the move, so no melee attack after it (p.12)
 	"auto_place_reserves": false,
@@ -46,7 +45,7 @@ var _next_uid := 1
 # ---------------------------------------------------------------------------------------------
 # Setup
 
-func setup(r0: Roster, r1: Roster, scenario_id: String, twist := -1, seed_value := -1) -> void:
+func setup(r0: Roster, r1: Roster, scenario_id: String, twist := -1, seed_value := -1, layout: Dictionary = {}) -> void:
 	dice = Dice.new(seed_value if seed_value >= 0 else int(Time.get_ticks_usec() % 2147483647))
 	rosters = [r0.to_dict(), r1.to_dict()]
 	player_names = [r0.name, r1.name]
@@ -69,7 +68,7 @@ func setup(r0: Roster, r1: Roster, scenario_id: String, twist := -1, seed_value 
 	for f in fighters:
 		if f.has_rule("mad_engineering"):
 			f.statuses["engineering"] = dice.d3()
-	Scenario.setup(self, scenario_id, twist)
+	Scenario.setup(self, scenario_id, twist, layout)
 
 
 func new_uid() -> int:
@@ -165,6 +164,11 @@ func _check_turn() -> void:
 	if is_over():
 		return
 	active = -1
+	if scen.get("thunder", false):
+		scen.erase("thunder")
+		log_line("Thunder claps: time stops and the round ends immediately.")
+		_end_of_round()
+		return
 	var mine := can_activate_normally(turn)
 	var theirs := can_activate_normally(other(turn))
 	if mine.is_empty() and theirs.is_empty():
@@ -256,6 +260,7 @@ func _has_banner(p: int) -> bool:
 func end_battle(win: int, text: String) -> void:
 	winner = win
 	result_text = text
+	Twists.on_battle_end(self, win)
 	phase = "over"
 	pending = {}
 	log_line("BATTLE OVER: " + text + (" %s wins." % player_names[win] if win >= 0 else " Draw."))
@@ -290,7 +295,7 @@ func respond(choice: Dictionary) -> String:
 			_resolve_flee(p["player"], choice.get("voluntary", false))
 		"deploy", "place":
 			return Scenario.respond_placement(self, choice)
-		"pick_reserve_group", "pick_entry", "scenario_choice":
+		"pick_reserve_group", "pick_entry", "scenario_choice", "pick_quarter", "pick_fighter":
 			return Scenario.respond(self, choice)
 		"melee_weapons", "duel_turn":
 			return Combat.respond_duel(self, choice)
@@ -381,7 +386,8 @@ func _start_of_activation(f: FighterState) -> void:
 					end_activation()
 					return
 				break
-	Scenario.start_of_activation(self, f)
+	if not Scenario.start_of_activation(self, f):
+		end_activation()
 
 
 ## Surge activations and bloodied fighters get a move OR an action (pp.12, 19); healing lifts the bloodied limit.
@@ -442,6 +448,29 @@ func end_activation() -> String:
 	turn = other(turn)
 	_check_turn()
 	return ""
+
+
+## Winged Familiar: a harried fighter must pass a Willpower test for each Move or Action, or lose it.
+func harried_check(f: FighterState, what: String) -> bool:
+	if not f.has_effect("harried"):
+		return true
+	var t := dice.test(int(f.stats["willpower"]))
+	mark_dice_rolled()
+	if t["pass"]:
+		log_line("%s shrugs off the harrying (rolled %d)." % [f.name, t["roll"]])
+		return true
+	log_line("%s is harried and loses their %s (rolled %d)." % [f.name, what, t["roll"]])
+	if what == "move":
+		f.moved = true
+	else:
+		f.acted = true
+	changed.emit()
+	return false
+
+
+## Things resolved after each move or action: fighters near open platform edges may fall (p.16).
+func after_action() -> void:
+	Height.fall_checks(self)
 
 
 # ---------------------------------------------------------------------------------------------

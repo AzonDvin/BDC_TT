@@ -184,7 +184,7 @@ func _def_tooltip(d: Dictionary) -> String:
 	var s: Dictionary = d["stats"]
 	var lines: PackedStringArray = []
 	lines.append("%s — %s" % [d["name"], ", ".join(d["keywords"])])
-	lines.append("Move %s  Blade %s  Bow %s  Armour %s  Init %s  Will %s  Life %s" % [s["move"], _tn(s["blade"]), _tn(s["bow"]), _tn(s["armour"]), s["initiative"], s["willpower"], s["life"]])
+	lines.append("Move %s  Blade %s  Bow %s  Armour %s  Init %s  Will %s  Life %s" % [UI.num(s["move"]), _tn(s["blade"]), _tn(s["bow"]), _tn(s["armour"]), UI.num(s["initiative"]), UI.num(s["willpower"]), UI.num(s["life"])])
 	lines.append("Wargear lists: %s" % ", ".join(d.get("wargear_lists", [])) if not d.get("exclusive_wargear", false) else "Fixed wargear only")
 	for sr in d.get("special_rules", []):
 		lines.append("%s: %s" % [sr["name"], sr["text"]])
@@ -193,7 +193,7 @@ func _def_tooltip(d: Dictionary) -> String:
 
 
 static func _tn(v) -> String:
-	return "-" if v == null else "%s+" % v
+	return "-" if v == null else "%s+" % UI.num(v)
 
 
 func _recruit(def_id: String) -> void:
@@ -231,7 +231,7 @@ func _fill_editor() -> void:
 	ne.text_changed.connect(func(t): m["name"] = t; _fill_members())
 	editor.add_child(ne)
 	var s: Dictionary = d["stats"]
-	editor.add_child(UI.label("Move %s   Blade %s   Bow %s   Armour %s   Initiative %s   Willpower %s   Life %s" % [s["move"], _tn(s["blade"]), _tn(s["bow"]), _tn(s["armour"]), s["initiative"], s["willpower"], s["life"]]))
+	editor.add_child(UI.label("Move %s   Blade %s   Bow %s   Armour %s   Initiative %s   Willpower %s   Life %s" % [UI.num(s["move"]), _tn(s["blade"]), _tn(s["bow"]), _tn(s["armour"]), UI.num(s["initiative"]), UI.num(s["willpower"]), UI.num(s["life"])]))
 	editor.add_child(UI.label("Cost with wargear: %ds   Starting XP: %s   (p.%s)" % [roster.member_cost(m), d["starting_xp"], d.get("page", "?")], 13))
 	for sr in d.get("special_rules", []):
 		editor.add_child(UI.label("• %s: %s" % [sr["name"], sr["text"]], 13))

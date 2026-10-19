@@ -4,14 +4,23 @@ extends RefCounted
 ## Keeping them in one place makes it possible to answer "why is this 5+?" (see explain arrays) and to test them.
 
 
-# --- Engagement --------------------------------------------------------------------------------
+# --- Distance and engagement -------------------------------------------------------------------
+
+## Base-to-base distance between two fighters, including height differences (p.7).
+static func dist(a: FighterState, b2: FighterState) -> float:
+	return Height.gap3(a.pos, a.radius, a.elev, b2.pos, b2.radius, b2.elev)
+
+
+static func near(a: FighterState, b2: FighterState, inches: float) -> bool:
+	return dist(a, b2) <= inches + Geo.EPS
+
 
 static func engaged_enemies(b: Battle, f: FighterState) -> Array:
 	var out: Array = []
 	if not f.on_board():
 		return out
 	for o in b.fighters:
-		if o.on_board() and o.player != f.player and Geo.within(f.pos, f.radius, o.pos, o.radius, 1.0):
+		if o.on_board() and o.player != f.player and Effects.near(f, o, 1.0):
 			out.append(o)
 	return out
 
@@ -34,7 +43,7 @@ static func _friendly_aura(b: Battle, f: FighterState, effect_id: String) -> Dic
 static func _friendly_with_rule_within(b: Battle, f: FighterState, rule: String, inches: float, include_self := false) -> bool:
 	for o in b.fighters:
 		if o.on_board() and o.player == f.player and (include_self or o != f) and o.has_rule(rule):
-			if Geo.within(f.pos, f.radius, o.pos, o.radius, inches):
+			if Effects.near(f, o, inches):
 				return true
 	return false
 
@@ -123,6 +132,12 @@ static func attack_mod(b: Battle, att: FighterState, w: Dictionary, target: Figh
 		m -= 1
 		explain.append("Unwieldy -1")
 	if ranged:
+		if target != null and att.elev - target.elev >= 3.0 - Geo.EPS:
+			m += 1
+			explain.append("Vantage +1")
+		if target != null and Twists.ranged_penalty(b, att, target) < 0:
+			m -= 1
+			explain.append("Eldritch Barrier -1")
 		if att.has_rule("steady_aim") and not att.moved:
 			m += 1
 			explain.append("Steady Aim +1")
@@ -138,8 +153,6 @@ static func attack_mod(b: Battle, att: FighterState, w: Dictionary, target: Figh
 		if b.scen.get("twist_id", "") == "beggars_desperation" and att.treasure == 0 and target != null and target.treasure > 0:
 			m += 1
 			explain.append("Beggar's Desperation +1")
-		if target != null and target.has_effect("blood_frenzy_zone"):
-			pass
 	if att.has_effect("disorientated"):
 		m -= 1
 		explain.append("Disorientated -1")
@@ -246,44 +259,37 @@ static func range_for(b: Battle, f: FighterState, w: Dictionary) -> float:
 
 # --- Visibility (p.9) and cover (p.28) --------------------------------------------------------
 
-## {"visible": bool, "obscured": bool}. Top-down approximation: lines from the observer's head (base centre)
-## to points across the target's base. High terrain and other fighters block lines; low terrain close to the
-## target hides its lower body (obscured). See the bdc-rules-expert ambiguities list.
+## {"visible": bool, "obscured": bool} (p.9). Sight lines run from the observer's eye to points on the target's
+## body (three heights across its base). A line is blocked by solid terrain (walls, low terrain, platform slabs,
+## closed doors, window sills/lintels: TerrainPiece.solid_bands) or by another fighter's body.
+## Visible if any line is clear; obscured if some are blocked.
 static func visibility(b: Battle, obs: FighterState, tgt: FighterState) -> Dictionary:
-	return visibility_from_point(b, obs.pos, obs, tgt)
+	return visibility_from_point(b, obs.pos, eye_height(obs), obs, tgt)
 
 
-static func visibility_from_point(b: Battle, from: Vector2, obs: FighterState, tgt: FighterState, ignore_hidden := false) -> Dictionary:
+static func eye_height(f: FighterState) -> float:
+	return f.elev + f.height * 0.9
+
+
+static func visibility_from_point(b: Battle, from: Vector2, from_z: float, obs: FighterState, tgt: FighterState, ignore_hidden := false) -> Dictionary:
 	if obs == tgt:
 		return {"visible": true, "obscured": false}
 	var limit: float = b.scen.get("visibility_limit", 0.0)
+	var fog: float = fog_limit(b, from, tgt.pos)
+	if fog > 0.0 and (limit <= 0.0 or fog < limit):
+		limit = fog
 	if limit > 0.0 and from.distance_to(tgt.pos) - tgt.radius > limit:
 		return {"visible": false, "obscured": false}
 	var lines := 0
 	var clear := 0
-	var low_obscured := false
-	for s in Geo.base_samples(tgt.pos, tgt.radius):
-		lines += 1
-		var blocked := false
-		for t in b.terrain:
-			if t.blocks_sight(tgt.height) and Geo.segment_crosses_polygon(from, s, t.polygon):
-				blocked = true
-				break
-		if not blocked:
-			for o in b.fighters:
-				if o.on_board() and o != tgt and o != obs and Geo.segment_hits_circle(from, s, o.pos, o.radius * 0.9):
-					blocked = true
-					break
-		if blocked:
-			continue
-		clear += 1
-		for t in b.terrain:
-			if t.is_low() and t.height < tgt.height:
-				var entry = Geo.first_entry(from, s, t.polygon)
-				if entry != null and (entry as Vector2).distance_to(tgt.pos) <= float(b.cfg["low_cover_range"]) + tgt.radius:
-					low_obscured = true
+	var heights := [tgt.elev + 0.25, tgt.elev + tgt.height * 0.55, tgt.elev + tgt.height * 0.95]
+	for s in Geo.base_samples(tgt.pos, tgt.radius * 0.8, 6):
+		for z in heights:
+			lines += 1
+			if not sight_blocked(b, Vector3(from.x, from.y, from_z), Vector3(s.x, s.y, z), obs, tgt):
+				clear += 1
 	var visible := clear > 0
-	var obscured := visible and (clear < lines or low_obscured)
+	var obscured := visible and clear < lines
 	if visible and not ignore_hidden and obs != null and obs.player != tgt.player:
 		if tgt.statuses.get("hidden", false) and obscured and not _sniffed(b, obs.player, tgt):
 			visible = false
@@ -292,9 +298,56 @@ static func visibility_from_point(b: Battle, from: Vector2, obs: FighterState, t
 	return {"visible": visible, "obscured": obscured}
 
 
+## Is the sight line from a to c blocked? Points are (x, y, height) in inches.
+static func sight_blocked(b: Battle, a: Vector3, c: Vector3, obs: FighterState = null, tgt: FighterState = null) -> bool:
+	var a2 := Vector2(a.x, a.y)
+	var c2 := Vector2(c.x, c.y)
+	var seg_len := maxf(a2.distance_to(c2), 0.0001)
+	for t in b.terrain:
+		var bands: Array = t.solid_bands()
+		if bands.is_empty():
+			continue
+		var parts := Geometry2D.intersect_polyline_with_polygon(PackedVector2Array([a2, c2]), t.polygon)
+		for part in parts:
+			var z0 := lerpf(a.z, c.z, a2.distance_to(part[0]) / seg_len)
+			var z1 := lerpf(a.z, c.z, a2.distance_to(part[part.size() - 1]) / seg_len)
+			var lo := minf(z0, z1)
+			var hi := maxf(z0, z1)
+			for band in bands:
+				if hi >= band.x + 0.01 and lo <= band.y - 0.01:
+					return true
+	for o in b.fighters:
+		if o.on_board() and o != obs and o != tgt:
+			var q := Geometry2D.get_closest_point_to_segment(o.pos, a2, c2)
+			if q.distance_to(o.pos) < o.radius * 0.9:
+				var z := lerpf(a.z, c.z, a2.distance_to(q) / seg_len)
+				if z >= o.elev and z <= o.elev + o.height:
+					return true
+	var vortex: Dictionary = b.scen.get("vortex", {})
+	if not vortex.is_empty():
+		var vq := Geometry2D.get_closest_point_to_segment(vortex["c"], a2, c2)
+		var vz := lerpf(a.z, c.z, a2.distance_to(vq) / seg_len)
+		if vq.distance_to(vortex["c"]) < float(vortex["r"]) and absf(vz - float(vortex["elev"])) < 3.0:
+			return true
+	return false
+
+
+## Rolling Fog (No Quarter twist): no sight beyond 6" if either end is in a fogged quarter.
+static func fog_limit(b: Battle, a: Vector2, c: Vector2) -> float:
+	var fogged: Array = b.scen.get("fog", [])
+	if fogged.is_empty():
+		return 0.0
+	var ctr := b.board_size / 2.0
+	for p in [a, c]:
+		var q := (0 if p.x < ctr.x else 1) if p.y < ctr.y else (3 if p.x < ctr.x else 2)
+		if q in fogged:
+			return 6.0
+	return 0.0
+
+
 static func _sniffed(b: Battle, player: int, tgt: FighterState) -> bool:
 	for o in b.fighters:
-		if o.on_board() and o.player == player and o.has_rule("sniff_em_out") and Geo.within(o.pos, o.radius, tgt.pos, tgt.radius, 9.0):
+		if o.on_board() and o.player == player and o.has_rule("sniff_em_out") and Effects.near(o, tgt, 9.0):
 			return true
 	return false
 
@@ -306,8 +359,13 @@ static func _near_terrain(b: Battle, f: FighterState, inches: float) -> bool:
 	return false
 
 
+## "Touching terrain" (Hide, p.27). On a real table bases are pushed up against the wall; on screen we allow a
+## small gap so a fighter placed next to a wall by clicking still counts as touching it.
+const TOUCH_TOLERANCE := 0.35
+
+
 static func touching_terrain(b: Battle, f: FighterState) -> bool:
-	return _near_terrain(b, f, 0.1)
+	return f.elev > Height.LEVEL_EPS or _near_terrain(b, f, TOUCH_TOLERANCE)
 
 
 ## Cover for a ranged attack: obscured, or protected by an aura such as Gathering Shadows.

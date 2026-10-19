@@ -15,7 +15,7 @@ const SPELLS := {
 	# Lore of Sanctioned Magic
 	"Arcane Missile": {"target": "closest", "range": 15.0},
 	"Flaming Weapon": {"target": "friendly", "range": 6.0, "crit_range": 12.0, "visible": true},
-	"Eldritch Barrier": {"target": "manual"},
+	"Eldritch Barrier": {"target": "two_points", "range": 9.0, "gap": 6.0, "crit_gap": 9.0, "visible": true},
 	"Silence": {"target": "enemy", "range": 12.0, "crit_range": 18.0, "visible": true},
 	"Torrent of Fire": {"target": "dir"},
 	"Umbral Vortex": {"target": "point", "range": 15.0, "visible": true},
@@ -126,6 +126,8 @@ static func draw_power(b: Battle) -> String:
 	var err := can_use_arcane(b, f)
 	if err != "":
 		return err
+	if not b.harried_check(f, "action"):
+		return ""
 	f.acted = true
 	f.statuses["drawn_power"] = true
 	f.statuses.erase("drawn_power_used_window")
@@ -151,6 +153,8 @@ static func cast(b: Battle, spell_name: String, params: Dictionary) -> String:
 		return err
 	if spell_name in ["Raise Zombie", "Raise Skeleton", "Summon Rotling"] and _summoned_count(b, f.player) >= 3:
 		return "A warband can't have more than 3 summoned fighters."
+	if not b.harried_check(f, "action"):
+		return ""
 	f.acted = true
 	b.mark_dice_rolled()
 	var n_dice := 2 if f.statuses.get("drawn_power", false) else 1
@@ -172,6 +176,7 @@ static func cast(b: Battle, spell_name: String, params: Dictionary) -> String:
 		b.log_line("%s attempts %s: %s — MISCAST!" % [f.name, spell_name, roll["text"]])
 		var outcome := _miscast(b, f)
 		if outcome != "burst":
+			b.after_action()
 			b.changed.emit()
 			return ""
 		crit = true
@@ -184,6 +189,7 @@ static func cast(b: Battle, spell_name: String, params: Dictionary) -> String:
 		b.log_line("%s casts %s: %s + Willpower %d = %d vs %d+%s." % [f.name, spell_name, roll["text"], f.stats["willpower"], total, spell["casting"], " — CRITICAL CAST" if crit else ""])
 	if f.on_board():
 		_resolve(b, f, spell, crit, params)
+	b.after_action()
 	b.changed.emit()
 	return ""
 
@@ -215,14 +221,14 @@ static func _miscast(b: Battle, f: FighterState) -> String:
 		r = r2
 	if r == 2:
 		b.log_line("Inferno of Sorcery (%d): %s explodes in balefire!" % [r, f.name])
-		for o in Combat.blast_hits(b, f.pos):
+		for o in Combat.blast_hits(b, f.pos, f.elev):
 			if o != f:
 				Combat.apply_damage(b, o, b.dice.d6(), f, "Inferno of Sorcery")
 		Combat.take_down(b, f, null, "Inferno of Sorcery")
 		return "down"
 	if r <= 5:
 		b.log_line("Arcane Explosion (%d): the spell fails and eldritch fire erupts." % r)
-		for o in Combat.blast_hits(b, f.pos):
+		for o in Combat.blast_hits(b, f.pos, f.elev):
 			Combat.apply_damage(b, o, b.dice.d3(), f, "Arcane Explosion")
 		return "fail"
 	if r <= 7:
@@ -263,7 +269,7 @@ static func _validate_target(b: Battle, f: FighterState, name: String, params: D
 					return "The target must be a %s." % " or ".join(info["kw"])
 			if info.get("thrall", false) and not t.has_kw("Thrall"):
 				return "The target must be a Thrall."
-			if t != f and not Geo.within(f.pos, f.radius, t.pos, t.radius, rng):
+			if t != f and not Effects.near(f, t, rng):
 				return "Out of range (%.0f\")." % rng
 			if info.get("visible", false) and not Effects.visibility(b, f, t)["visible"]:
 				return "The target must be visible."
@@ -276,41 +282,58 @@ static func _validate_target(b: Battle, f: FighterState, name: String, params: D
 				var pt: Vector2 = params["point"]
 				if f.pos.distance_to(pt) > place_rng + f.radius + Geo.EPS:
 					return "Too far from the caster (%.0f\")." % place_rng
-				return _placement_ok(b, t, pt)
+				return _placement_ok(b, t, pt, params.get("elev", 0.0))
 		"point", "summon":
 			if not params.has("point"):
 				return "Pick a point."
 			var pt: Vector2 = params["point"]
-			if f.pos.distance_to(pt) - f.radius > rng + Geo.EPS:
+			var pel: float = params.get("elev", 0.0)
+			if Vector2(f.pos.distance_to(pt) - f.radius, pel - f.elev).length() > rng + Geo.EPS:
 				return "That point is out of range (%.0f\")." % rng
-			if info.get("visible", false) and not Combat.point_visible(b, f.pos, pt, [f]):
+			if info.get("visible", false) and not Combat.point_visible(b, f.pos, pt, [f], Effects.eye_height(f), pel + 0.3):
 				return "That point isn't visible."
 			if info["target"] == "summon":
 				var probe := FighterState.new()
 				probe.radius = Geo.radius_from_mm(32.0)
 				probe.player = f.player
-				return _placement_ok(b, probe, pt)
+				return _placement_ok(b, probe, pt, pel)
 		"dir":
 			if not params.has("dir") or (params["dir"] as Vector2).length() < 0.01:
 				return "Pick a direction."
+		"two_points":
+			if not params.has("point") or not params.has("point2"):
+				return "Pick two points."
+			for key in ["point", "point2"]:
+				var q: Vector2 = params[key]
+				if f.pos.distance_to(q) - f.radius > float(info["range"]) + Geo.EPS:
+					return "Both points must be within %.0f\" of the caster." % info["range"]
+				if not Combat.point_visible(b, f.pos, q, [f], Effects.eye_height(f), float(params.get("elev", 0.0)) + 0.3):
+					return "Both points must be visible."
+			if (params["point"] as Vector2).distance_to(params["point2"]) > float(info["crit_gap"]) + Geo.EPS:
+				return "The points must be within %.0f\" of each other." % info["crit_gap"]
 		"closest":
 			if _closest_enemy(b, f, _range(info, false)) == null and _closest_enemy(b, f, _range(info, true)) == null:
 				return "No visible enemy within range."
 	return ""
 
 
-static func _placement_ok(b: Battle, f: FighterState, pt: Vector2) -> String:
+static func _placement_ok(b: Battle, f: FighterState, pt: Vector2, elev := 0.0) -> String:
 	if not Geo.base_inside_board(pt, f.radius, b.board_size):
 		return "That's off the battlefield."
-	for t in b.terrain:
-		if t.blocks_movement() and Geo.base_overlaps_polygon(pt, f.radius, t.polygon):
-			return "Can't set up on %s." % t.name
+	if not Height.supports(b, pt, elev):
+		return "There's no floor or platform to stand on there."
+	if elev > Height.LEVEL_EPS and f.has_rule("large_and_heavy"):
+		return "Large and Heavy fighters must be set up on the battlefield floor."
+	# The whole base must be clear of walls, statues and ladders on this level, not just its centre.
+	var blocker := Height.base_clear(b, pt, f.radius, elev)
+	if blocker != "":
+		return "Can't stand there: the base would overlap %s." % blocker
 	for o in b.on_board():
 		if o == f:
 			continue
-		if Geo.signed_gap(pt, f.radius, o.pos, o.radius) < -Geo.EPS:
+		if absf(o.elev - elev) < minf(maxf(f.height, 1.0), o.height) and Geo.signed_gap(pt, f.radius, o.pos, o.radius) < -Geo.EPS:
 			return "Overlaps %s." % o.name
-		if o.player != f.player and Geo.within(pt, f.radius, o.pos, o.radius, 1.0):
+		if o.player != f.player and Height.gap3(pt, f.radius, elev, o.pos, o.radius, o.elev) <= 1.0 + Geo.EPS:
 			return "Must not be set up engaged in melee."
 	return ""
 
@@ -389,7 +412,7 @@ static func _resolve(b: Battle, f: FighterState, spell: Dictionary, crit: bool, 
 							continue
 						var near := false
 						for c in chain:
-							if Geo.within(c.pos, c.radius, o.pos, o.radius, 3.0):
+							if Effects.near(c, o, 3.0):
 								near = true
 						if near and Effects.visibility(b, chain[-1], o)["visible"]:
 							nxt = o
@@ -469,7 +492,7 @@ static func _resolve(b: Battle, f: FighterState, spell: Dictionary, crit: bool, 
 			b.log_line("The ground is consecrated.")
 		"Dark Vitality":
 			for o in b.on_board(f.player):
-				if Geo.within(f.pos, f.radius, o.pos, o.radius, 6.0 if crit else 3.0):
+				if Effects.near(f, o, 6.0 if crit else 3.0):
 					b.heal(o, 1, name)
 		"Witchfire":
 			var n := 3 if crit else b.dice.d3()
@@ -505,33 +528,39 @@ static func _resolve(b: Battle, f: FighterState, spell: Dictionary, crit: bool, 
 						b.heal(f, dealt2, name)
 		"Umbral Vortex", "Bouncing Blast", "Plague Bomb", "Death Blast", "Rain of Filth":
 			var c2: Vector2 = params["point"]
+			var c2_elev: float = params.get("elev", 0.0)
 			if not crit:  # every one of these spells skips its first scatter on a critical cast
 				var s := b.dice.d6()
 				c2 = Combat.scatter_point(b, c2, s)
+				if not Height.supports(b, c2, c2_elev):
+					c2_elev = Height.level_below(b, c2, c2_elev + 0.01) if c2_elev > 0.0 else 0.0
 				b.log_line("The template scatters %d\"." % s)
 			var passes := 2 if name == "Bouncing Blast" else 1
 			for k in passes:
 				if k == 1:
 					var s2 := b.dice.d6()
 					c2 = Combat.scatter_point(b, c2, s2)
+					if not Height.supports(b, c2, c2_elev):
+						c2_elev = Height.level_below(b, c2, c2_elev + 0.01) if c2_elev > 0.0 else 0.0
 					b.log_line("The blast bounces %d\"." % s2)
-				b.scen["last_template"] = {"type": "blast", "pos": c2, "round": b.round_no}
-				for t7 in Combat.blast_hits(b, c2):
+				b.scen["last_template"] = {"type": "blast", "pos": c2, "elev": c2_elev, "round": b.round_no}
+				for t7 in Combat.blast_hits(b, c2, c2_elev):
 					if name == "Rain of Filth":
 						b.heal(t7, b.dice.d3(), name)
 						continue
 					var probe := FighterState.new()
 					probe.pos = c2
-					var cover: bool = Effects.visibility_from_point(b, c2, probe, t7, true)["obscured"]
+					var cover: bool = Effects.visibility_from_point(b, c2, c2_elev + 0.5, probe, t7, true)["obscured"]
 					_hit(b, f, t7, profile, cover)
 					if name == "Plague Bomb" and t7.on_board() and t7.can_be_poisoned():
 						t7.statuses["poisoned"] = true
 			if name == "Umbral Vortex":
-				b.log_line("The vortex lingers until the end of the round (resolve its line-of-sight and movement effects on the table).")
+				b.scen["vortex"] = {"c": c2, "r": Combat.BLAST_RADIUS, "elev": c2_elev, "rend": profile["rend"], "damage": profile["damage"], "caster": f.uid}
+				b.log_line("The vortex lingers until the end of the round: it blocks sight, and fighters starting in it or moving across it are hit.")
 		"Plague Wind":
 			var c3: Vector2 = params["point"]
 			b.scen["last_template"] = {"type": "blast", "pos": c3, "round": b.round_no}
-			for t8 in Combat.blast_hits(b, c3):
+			for t8 in Combat.blast_hits(b, c3, params.get("elev", 0.0)):
 				if t8.player == f.player or _warded(b, f, t8):
 					continue
 				var r := b.dice.d6() + (1 if crit else 0)
@@ -553,14 +582,33 @@ static func _resolve(b: Battle, f: FighterState, spell: Dictionary, crit: bool, 
 					Combat.apply_damage(b, t9, b.dice.d3(), f, name)
 					if t9.on_board() and t9.can_be_poisoned():
 						t9.statuses["poisoned"] = true
-			b.log_line("A plague pit opens (fighters on the floor can't cross it this round; treasure on it is destroyed).")
+			var pits: Array = b.scen.get("pits", [])
+			pits.append({"c": c4, "r": Combat.BLAST_RADIUS})
+			b.scen["pits"] = pits
+			for i in range(b.tokens.size() - 1, -1, -1):
+				if b.tokens[i]["type"] == "treasure" and (b.tokens[i]["pos"] as Vector2).distance_to(c4) <= Combat.BLAST_RADIUS:
+					b.tokens.remove_at(i)
+					b.log_line("Treasure tumbles into the pit and is lost.")
+			b.log_line("A plague pit opens: fighters on the floor can't cross it this round.")
+		"Eldritch Barrier":
+			var p1: Vector2 = params["point"]
+			var p2: Vector2 = params["point2"]
+			var gap: float = info["crit_gap"] if crit else info["gap"]
+			if p1.distance_to(p2) > gap:
+				p2 = p1 + (p2 - p1).normalized() * gap
+			var bars: Array = b.scen.get("barriers", [])
+			bars.append({"a": p1, "b": p2, "elev": float(params.get("elev", 0.0)), "caster": f.uid})
+			b.scen["barriers"] = bars
+			b.log_line("An Eldritch Barrier shimmers into being (%.1f\" long) until the end of the round." % p1.distance_to(p2))
 		"Shadow Leap", "Twilight Translocation", "Recall":
 			var pt: Vector2 = params["point"]
-			if _placement_ok(b, target, pt) == "":
+			var pel2: float = params.get("elev", 0.0)
+			if _placement_ok(b, target, pt, pel2) == "":
 				target.pos = pt
+				target.elev = pel2
 				b.log_line("%s is set up again elsewhere." % target.name)
 		"Raise Zombie", "Raise Skeleton", "Summon Rotling":
-			var nf := summon(b, f, info["summon"], params["point"])
+			var nf := summon(b, f, info["summon"], params["point"], params.get("elev", 0.0))
 			if nf:
 				b.log_line("A %s rises to join %s's warband." % [nf.name, b.player_names[f.player]])
 		"Tunnel from Below":
@@ -584,7 +632,7 @@ static func _resolve(b: Battle, f: FighterState, spell: Dictionary, crit: bool, 
 
 static func _second_friendly(b: Battle, f: FighterState, first: FighterState, rng: float, kws: Array) -> FighterState:
 	for o in b.on_board(f.player):
-		if o == first or not Geo.within(f.pos, f.radius, o.pos, o.radius, rng):
+		if o == first or not Effects.near(f, o, rng):
 			continue
 		if not kws.is_empty():
 			var ok := false
@@ -597,7 +645,7 @@ static func _second_friendly(b: Battle, f: FighterState, first: FighterState, rn
 	return null
 
 
-static func summon(b: Battle, caster: FighterState, def_id: String, at: Vector2) -> FighterState:
+static func summon(b: Battle, caster: FighterState, def_id: String, at: Vector2, elev := 0.0) -> FighterState:
 	var r := Roster.new()
 	r.faction = caster.faction
 	var m := r.add_member(def_id)
@@ -607,6 +655,7 @@ static func summon(b: Battle, caster: FighterState, def_id: String, at: Vector2)
 	nf.summoned = true
 	nf.where = "board"
 	nf.pos = at
+	nf.elev = elev
 	nf.activated = true
 	b.fighters.append(nf)
 	return nf

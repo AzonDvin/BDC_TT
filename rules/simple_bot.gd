@@ -33,6 +33,10 @@ static func answer(b: Battle) -> String:
 			return b.respond(opts[0]["choice"])
 		"volley":
 			return b.respond({"targets": []})
+		"pick_quarter":
+			return b.respond({"quarter": 0})
+		"pick_fighter":
+			return b.respond({"uid": p["candidates"][0]})
 	return "unknown pending %s" % p.get("type", "")
 
 
@@ -60,7 +64,7 @@ static func play_activation(b: Battle) -> void:
 		if b.active != f.uid:
 			return
 	elif e != null and b.can_still_move(f) and not Effects.is_engaged(b, f):
-		var gap := Geo.base_gap(f.pos, f.radius, e.pos, e.radius)
+		var gap := Effects.dist(f, e)
 		var shooter := not f.usable_ranged().is_empty() and f.stats["bow"] != null
 		if gap < 9.0 and not f.acted and not shooter:
 			if Movement.declare(b, "charge") == "" and not b.move_plan.is_empty():

@@ -39,7 +39,9 @@ Tool scripts run with `--script` can't name the `App` autoload at compile time. 
   - `Combat`: ranged attacks with the closest-target rule, templates, `resolve_hit`, and the alternating melee **duel** state machine kept in `battle.duel`.
   - `Magic`: casting, miscasts, and the `SPELLS` targeting table for all 48 spells.
   - `Abilities`: bonus and special actions.
-  - `Scenario`: terrain generation, deployment zones, reserves, treasure, twists and victory for all 6 scenarios.
+  - `Scenario`: terrain generation, deployment zones, reserves, treasure and victory for all 6 scenarios.
+  - `Twists`: scenario twists and round-long spell effects.
+  - `Height`: surfaces, climbing faces, falling and impact damage.
 - **`Effects` is the single place for number-changing rules:** armour, attack modifiers, crit thresholds, damage, ranges, auras and **visibility/cover**. Add new skill or spell modifiers there, not at call sites.
 - **Data:** `data/bdc/*.json` is the faction data (fighters, armouries, spells, skills), read via `Catalog`. It is copied from the bdc-rules-expert skill's `data/` folder, so keep the two in sync. `Roster` builds and validates warbands. `FighterState` is a fighter's battle state, built from a roster member.
 - **Determinism and saves:**
@@ -49,11 +51,20 @@ Tool scripts run with `--script` can't name the `App` autoload at compile time. 
   - One unit = one inch. Battle `(x, y)` maps to world `(x, 0, y)`.
   - Fighter distances are base edge to base edge (`Geo.base_gap`, clamped at 0).
   - **Use `Geo.signed_gap` for overlap checks.** A clamped gap can never be negative.
-  - Terrain is floor polygons with a height. High terrain (1.5" or taller) blocks movement and sight. Low terrain costs 1" to cross and obscures fighters close behind it.
+  - Terrain (`TerrainPiece`) is floor polygons with a height. Kinds are high, low, impassable, deadly, platform, ladder, door and window.
+    - `solid_bands()` gives the heights that block sight.
+    - `has_surface()` marks walkable tops: platforms, and roofs at least 1"x1".
+  - **Height** (`rules/height.gd`): a fighter is `(pos, elev)`.
+    - All fighter-to-fighter distances are 3D: use `Effects.dist()` and `Effects.near()`, not `Geo` helpers.
+    - Moves are waypoints with a level each. `Movement._segment` decides walk, jump (max 3" through the air), ladder (1"), climb (vertical distance counts), jump down (impact damage from 3") or fly.
+    - `Battle.after_action()` runs fall checks.
+  - **Sight** (`Effects.sight_blocked`) is true 3D: from the observer's eye to three heights across the target's body.
+- **Twists and lingering effects** live in `rules/twists.gd`, hooked from `Scenario`.
+  - Every twist in all six scenarios is automated. Start-of-round choices (Forsaken Quarter, Condemned) are `pick_quarter`/`pick_fighter` decisions.
+  - Eldritch Barrier, Umbral Vortex and Plague Pit last until the end of the round in `scen`, and `Twists.clear_round()` removes them.
+- **Terrain editor** (`view/terrain_editor.gd`): saves layouts to `user://layouts/` via `Layout`. `Battle.setup(..., layout)` uses a saved layout instead of generating terrain. Pieces share a `group` id so a ruin moves as one.
 - **Scope limits (current version):**
-  - Fighters stay on the battlefield floor: no climbing, platforms, jumping, falling or vantage.
-  - Doors and windows aren't modelled.
-  - Scenario twists not in `Scenario.AUTOMATED_TWISTS`, and spells with `target: "manual"`, are announced for the players to resolve with the in-game **Table tools**.
+  - Fighters can't end a move part-way up a wall (the book allows it, p.22).
   - The campaign chapter is absent from v1.03.
 
 ## Conventions

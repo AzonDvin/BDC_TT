@@ -24,6 +24,7 @@ var signature_spells: PackedStringArray = []
 var prepared: Array = []                 # spell dicts with "lore" added
 
 var pos := Vector2.ZERO
+var elev := 0.0                          # height of the surface the fighter stands on (inches)
 var life := 4
 var where := "reserve"                   # reserve | board | down | escaped
 var battle_group := 0
